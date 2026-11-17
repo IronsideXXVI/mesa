@@ -106,6 +106,12 @@ agx_g16_host_blend_src_enabled(void)
    return debug_get_bool_option("ASAHI_G16_HOST_BLEND_SRC", true);
 }
 
+bool
+agx_g16_border_twin_enabled(void)
+{
+   return debug_get_bool_option("ASAHI_G16_BORDER_TWIN", true);
+}
+
 /* The last compile refusal of this thread. It lives in thread-specific storage
  * rather than a __thread array: libgallium and libvulkan_asahi use the
  * initial-exec TLS model, and a dlopen() of either only gets glibc's small
