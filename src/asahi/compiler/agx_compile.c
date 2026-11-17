@@ -82,6 +82,12 @@ agx_get_compiler_debug(void)
    return debug_get_option_agx_compiler_debug();
 }
 
+bool
+agx_g16_blend_dst_first_enabled(void)
+{
+   return debug_get_bool_option("ASAHI_G16_BLEND_DST_FIRST", true);
+}
+
 static __thread char agx_refusal[192];
 
 const char *
