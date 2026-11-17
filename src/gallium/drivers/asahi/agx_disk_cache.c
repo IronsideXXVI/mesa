@@ -249,6 +249,8 @@ agx_disk_cache_init(struct agx_screen *screen)
    _mesa_sha1_format(timestamp, id_sha1);
 
    uint64_t driver_flags = screen->dev.debug;
+   if (screen->dev.chip == AGX_CHIP_G16G && agx_g16_shared_nz_enabled())
+      driver_flags |= UINT64_C(1) << 63;
    screen->disk_cache = disk_cache_create(renderer, timestamp, driver_flags);
 #endif
 }
