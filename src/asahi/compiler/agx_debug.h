@@ -34,6 +34,8 @@ enum agx_compiler_dbg {
 
 uint64_t agx_get_compiler_debug(void);
 
+/* Qualified on G16G; ASAHI_G16_PIX_HOIST=0 restores the scheduler placement. */
+bool agx_g16_pix_hoist_enabled(void);
 /* Qualified on G16G; ASAHI_G16_BLEND_DST_FIRST=0 restores the source-first blend add. */
 bool agx_g16_blend_dst_first_enabled(void);
 
