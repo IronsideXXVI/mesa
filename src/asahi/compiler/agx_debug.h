@@ -38,6 +38,9 @@ uint64_t agx_get_compiler_debug(void);
 bool agx_g16_pix_hoist_enabled(void);
 /* Qualified on G16G; ASAHI_G16_BLEND_DST_FIRST=0 restores the source-first blend add. */
 bool agx_g16_blend_dst_first_enabled(void);
+/* Qualified on G16G; ASAHI_G16_HOST_BLEND_SRC=0 restores per-pixel evaluation
+ * of uniform-only inline-blend fragment arithmetic. */
+bool agx_g16_host_blend_src_enabled(void);
 
 /* Why the last agx_compile_shader_nir() on this thread returned false
  * ("" when it succeeded), for the driver's "cannot encode" error. */

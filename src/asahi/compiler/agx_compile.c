@@ -94,6 +94,12 @@ agx_g16_blend_dst_first_enabled(void)
    return debug_get_bool_option("ASAHI_G16_BLEND_DST_FIRST", true);
 }
 
+bool
+agx_g16_host_blend_src_enabled(void)
+{
+   return debug_get_bool_option("ASAHI_G16_HOST_BLEND_SRC", true);
+}
+
 static __thread char agx_refusal[192];
 
 const char *
