@@ -36,6 +36,7 @@ enum agx_compiler_dbg {
 /* clang-format on */
 
 uint64_t agx_get_compiler_debug(void);
+bool agx_g16_shared_nz_enabled(void);
 
 /* Why the last agx_compile_shader_nir() on this thread returned false
  * ("" when it succeeded), for the driver's "cannot encode" error. */
