@@ -91,6 +91,12 @@ agx_get_compiler_debug(void)
    return debug_get_option_agx_compiler_debug();
 }
 
+bool
+agx_g16_blend_dst_first_enabled(void)
+{
+   return debug_get_bool_option("ASAHI_G16_BLEND_DST_FIRST", true);
+}
+
 /* The last compile refusal of this thread. It lives in thread-specific storage
  * rather than a __thread array: libgallium and libvulkan_asahi use the
  * initial-exec TLS model, and a dlopen() of either only gets glibc's small
