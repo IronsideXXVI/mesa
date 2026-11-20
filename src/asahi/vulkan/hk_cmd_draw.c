@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include <assert.h>
+#include <fenv.h>
 #include "agx_abi.h"
 #include "agx_bg_eot.h"
 #include "agx_bo.h"
@@ -7487,7 +7488,9 @@ hk_g16_host_num_srcs(uint8_t opcode)
 }
 
 /* Bit-exact host counterpart of the taken GPU operations: each result is
- * rounded to fp32 on its own (volatile: no contraction across operations).
+ * rounded to fp32 on its own (volatile: no contraction across operations),
+ * to nearest even like the GPU, whatever rounding mode the calling thread
+ * has set.
  * fneg, fabs and mov only change or copy bits and flush nothing; whatever
  * consumes their result on the GPU flushes it there. */
 static void
@@ -7495,6 +7498,9 @@ hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
                  uint32_t *out)
 {
    volatile float t[HK_G16_HOST_MAX_OPS];
+   const int caller_round = fegetround();
+   if (caller_round != FE_TONEAREST)
+      fesetround(FE_TONEAREST);
    for (unsigned i = 0; i < p->n_ops; ++i) {
       float s[2] = {0.0f, 0.0f};
       /* Unused sources are zero-filled TEMP 0: never read them. */
@@ -7531,6 +7537,8 @@ hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
       }
       t[i] = r;
    }
+   if (caller_round != FE_TONEAREST)
+      fesetround(caller_round);
    for (unsigned k = 0; k < p->n_out; ++k) {
       const float f = t[p->out[k]];
       memcpy(&out[k], &f, sizeof(f));
