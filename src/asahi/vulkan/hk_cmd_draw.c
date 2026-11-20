@@ -7010,8 +7010,8 @@ hk_g16_host_eval_allowed(const struct hk_device *dev,
    if (dev->dev.chip != AGX_CHIP_G16G ||
        !agx_g16_host_blend_src_enabled() || ekey->native_spills)
       return false;
-   /* Host and GPU differ at most in denormal and NaN handling, which no
-    * UNORM store can observe. */
+   /* hk_g16_host_eval flushes fp32 denormals like the GPU, so host and GPU
+    * differ at most in NaN payloads, which no UNORM store can observe. */
    for (unsigned rt = 0; rt < ARRAY_SIZE(ekey->rt_formats); ++rt) {
       const enum pipe_format f = ekey->rt_formats[rt];
       if (f != PIPE_FORMAT_NONE &&
@@ -7218,8 +7218,28 @@ hk_g16_host_lower(nir_shader *nir, const struct hk_shader *shader,
    return true;
 }
 
+/* The GPU flushes fp32 denormals in arithmetic: hk exposes
+ * shaderDenormFlushToZeroFloat32 and no fp32 denormal preservation, so every
+ * fadd, fmul and fsat sees denormal operands as zero and returns zero for a
+ * denormal result. The host must do the same, or a tiny intermediate that the
+ * GPU flushes can be scaled back into range by a later multiply. Results are
+ * flushed after rounding to fp32; the zero keeps the sign. */
+static inline float
+hk_g16_host_ftz(float f)
+{
+   return fpclassify(f) == FP_SUBNORMAL ? copysignf(0.0f, f) : f;
+}
+
+static unsigned
+hk_g16_host_num_srcs(uint8_t opcode)
+{
+   return opcode == HK_G16_HOST_FMUL || opcode == HK_G16_HOST_FADD ? 2 : 1;
+}
+
 /* Bit-exact host counterpart of the taken GPU operations: each result is
- * rounded to fp32 on its own (volatile: no contraction across operations). */
+ * rounded to fp32 on its own (volatile: no contraction across operations).
+ * fneg, fabs and mov only change or copy bits and flush nothing; whatever
+ * consumes their result on the GPU flushes it there. */
 static void
 hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
                  uint32_t *out)
@@ -7227,7 +7247,9 @@ hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
    volatile float t[HK_G16_HOST_MAX_OPS];
    for (unsigned i = 0; i < p->n_ops; ++i) {
       float s[2] = {0.0f, 0.0f};
-      for (unsigned j = 0; j < 2; ++j) {
+      /* Unused sources are zero-filled TEMP 0: never read them. */
+      const unsigned n_src = hk_g16_host_num_srcs(p->ops[i].opcode);
+      for (unsigned j = 0; j < n_src; ++j) {
          const struct hk_g16_host_src *src = &p->ops[i].src[j];
          uint32_t u = 0;
          if (src->kind == HK_G16_HOST_TEMP) {
@@ -7242,11 +7264,17 @@ hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
       }
       float r;
       switch (p->ops[i].opcode) {
-      case HK_G16_HOST_FSAT:
-         r = isnan(s[0]) ? 0.0f : s[0] < 0.0f ? 0.0f : s[0] > 1.0f ? 1.0f : s[0];
+      case HK_G16_HOST_FSAT: {
+         const float x = hk_g16_host_ftz(s[0]);
+         r = isnan(x) ? 0.0f : x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
          break;
-      case HK_G16_HOST_FMUL: r = s[0] * s[1]; break;
-      case HK_G16_HOST_FADD: r = s[0] + s[1]; break;
+      }
+      case HK_G16_HOST_FMUL:
+         r = hk_g16_host_ftz(hk_g16_host_ftz(s[0]) * hk_g16_host_ftz(s[1]));
+         break;
+      case HK_G16_HOST_FADD:
+         r = hk_g16_host_ftz(hk_g16_host_ftz(s[0]) + hk_g16_host_ftz(s[1]));
+         break;
       case HK_G16_HOST_FNEG: r = -s[0]; break;
       case HK_G16_HOST_FABS: r = fabsf(s[0]); break;
       default: r = s[0]; break;
