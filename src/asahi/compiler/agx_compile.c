@@ -8892,7 +8892,7 @@ agx3_coalesce_uniform_half_stores(agx_context *ctx)
  * immediate, or the result of another such instruction. Moved instructions
  * keep their relative order and their exact operations, modifiers and
  * operands, so results are bit-identical. */
-static bool
+bool
 agx3_g16_hoist_pixel_independent(agx_context *ctx)
 {
    if (ctx->key->dev.chip != AGX_CHIP_G16G ||
