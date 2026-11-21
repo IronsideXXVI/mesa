@@ -611,11 +611,12 @@ hk_main_mesh_variant(struct hk_api_shader *obj)
     AGX_USC_REGISTERS_LENGTH + AGX_USC_SHADER_LENGTH + AGX_USC_SHARED_LENGTH + \
     AGX_USC_SAMPLER_LENGTH + (AGX_USC_UNIFORM_LENGTH * 9))
 
-/* G16G: uniform-only fp32 arithmetic of an
+/* Native AGX3 chips without a constant program (G15G/S/C, G16G; see
+ * agx_chip_native_preamble()): uniform-only fp32 arithmetic of an
  * inline-blend fragment program, evaluated on the host for each draw and
  * delivered in uniform halves [0, 2 * n_out) from the root's g16_host_unif.
- * G16G forms no native constant program (agx_chip_native_preamble()), so
- * without this every pixel recomputes these values. Only exact IEEE fp32
+ * With no constant program to take it, every pixel would otherwise
+ * recompute these values. Only exact IEEE fp32
  * operations are taken: fused multiply-add stays on the GPU
  * (agx_chip_exact_fma32()). */
 #define HK_G16_HOST_MAX_OPS 24

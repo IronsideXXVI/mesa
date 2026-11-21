@@ -285,7 +285,7 @@ struct hk_root_descriptor_table {
     * workgroup IDs are the API's without reading the grid. */
    uint32_t mesh_whole;
 
-   /* G16G host-evaluated fragment uniforms (hk_linked_shader::g16_host),
+   /* Host-evaluated fragment uniforms (hk_linked_shader::g16_host),
     * published to uniform halves [0, 2 * n_out). Must stay the last field
     * (asserted below), so no earlier offset depends on it. */
    uint32_t g16_host_unif[HK_G16_HOST_MAX_OUT];
