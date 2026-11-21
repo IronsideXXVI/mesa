@@ -7553,8 +7553,10 @@ hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
       float r;
       switch (p->ops[i].opcode) {
       case HK_G16_HOST_FSAT: {
+         /* nir fsat: util_min_num(util_max_num(x, 0.0), 1.0), so NaN and
+          * -0.0 both give +0.0. */
          const float x = hk_g16_host_ftz(s[0]);
-         r = isnan(x) ? 0.0f : x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
+         r = isnan(x) ? 0.0f : x <= 0.0f ? 0.0f : x > 1.0f ? 1.0f : x;
          break;
       }
       case HK_G16_HOST_FMUL:
