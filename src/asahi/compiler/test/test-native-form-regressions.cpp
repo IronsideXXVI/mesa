@@ -7,6 +7,7 @@
 #include "agx3_tex_core.h"
 #include "agx_test.h"
 #include "agx3_tile_core.h"
+#include "agx3_uniform_alu.h"
 #include "agx3_sr_core.h"
 #include "agx3_subgroup_core.h"
 #include "agx3_matrix_core.h"
@@ -7528,18 +7529,32 @@ TEST(NativeForms, G16NegativeZeroBoundaries)
          ralloc_free(mem);
       }
    }
-   /* Materialization preserves the negative-zero operand bit-for-bit.
-    * Include NaNs, both zero signs, subnormals, infinities and clamp edges.
-    * This host check does not claim GPU NaN/denormal qualification. */
-   for (uint32_t bits : {0u,0x80000000u,1u,0x80000001u,0x7fc12345u,
-                         0x7f800000u,0xff800000u,0x3f7fffffu,0x3f800001u}) {
-      float input; memcpy(&input,&bits,4);
-      uint32_t nz=0x80000000u; float reg;memcpy(&reg,&nz,4);
-      volatile float x=input;
-      volatile float a=x + -0.0f;
-      volatile float b=x + reg;
-      float aa=a,bb=b;uint32_t ab,bbits;memcpy(&ab,&aa,4);memcpy(&bbits,&bb,4);
-      EXPECT_EQ(ab,bbits);
+   /* The rewritten operands must have a native AGX3B encoding: the aligned
+    * f32 uniform in src0 and a register in src1, saturated. */
+   {
+      void *mem=ralloc_context(NULL);
+      agx_builder *b=agx_test_builder(mem);
+      agx_shader_key key={};
+      key.dev.chip=AGX_CHIP_G16G;
+      key.dev.encoding=AGX_ISA_ENCODING_AGX3B;
+      b->shader->key=&key;
+      agx_instr *I=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                             agx_uniform(16,AGX_SIZE_32),agx_negzero());
+      I->saturate=true;
+      agx_lower_uniform_sources(b->shader);
+      ASSERT_EQ(I->src[0].type,AGX_INDEX_UNIFORM);
+      ASSERT_EQ(I->src[1].type,AGX_INDEX_NORMAL);
+      struct agx3_uniform_float_src src[3]={};
+      src[0].kind=AGX3_FLOAT_UNIFORM;
+      src[0].value=I->src[0].value;
+      src[1].kind=AGX3_FLOAT_REGISTER;
+      src[1].value=2;
+      uint8_t bytes[16],length=0;
+      EXPECT_TRUE(agx3_uniform_float_encode(AGX_ISA_ENCODING_AGX3B,
+                                            AGX3_UNIFORM_FADD,0,src,true,
+                                            false,0,bytes,&length));
+      EXPECT_GT(length,0u);
+      ralloc_free(mem);
    }
 }
 
