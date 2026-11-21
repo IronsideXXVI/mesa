@@ -7449,25 +7449,19 @@ TEST(NativeForms, G16SharedNegativeZero)
       adds[c]->saturate = true;
    }
    agx_lower_uniform_sources(b->shader);
-   bool enabled = agx_g16_shared_nz_enabled();
    for (unsigned c = 0; c < 4; ++c) {
       EXPECT_TRUE(adds[c]->saturate);
       EXPECT_EQ(adds[c]->op, AGX_OPCODE_FADD);
       EXPECT_EQ(adds[c]->dest[0].size, AGX_SIZE_32);
-      if (enabled) {
-         EXPECT_EQ(adds[c]->src[0].type, AGX_INDEX_UNIFORM);
-         EXPECT_EQ(adds[c]->src[1].size, AGX_SIZE_32);
-         EXPECT_TRUE(agx_is_equiv(adds[c]->src[1], adds[0]->src[1]));
-      } else {
-         EXPECT_EQ(adds[c]->src[0].type, AGX_INDEX_NORMAL);
-         EXPECT_TRUE(agx_is_equiv(adds[c]->src[1], agx_negzero()));
-      }
+      EXPECT_EQ(adds[c]->src[0].type, AGX_INDEX_UNIFORM);
+      EXPECT_EQ(adds[c]->src[1].size, AGX_SIZE_32);
+      EXPECT_TRUE(agx_is_equiv(adds[c]->src[1], adds[0]->src[1]));
    }
    unsigned zeros = 0;
    agx_foreach_instr_global(b->shader, I) {
       if (I->op == AGX_OPCODE_MOV_IMM && I->imm == 0x80000000) zeros++;
    }
-   EXPECT_EQ(zeros, enabled ? 1u : 0u);
+   EXPECT_EQ(zeros, 1u);
    ralloc_free(mem);
 }
 
@@ -7501,9 +7495,8 @@ TEST(NativeForms, G16CapturedBlend)
    key.fs.nr_samples=1;
    agx_shader_part part={};
    ASSERT_TRUE(agx_compile_shader_nir(b.shader,&key,&part));
-   bool enabled = agx_g16_shared_nz_enabled();
-   EXPECT_EQ(part.info.stats.instrs, enabled ? 22u : 25u);
-   EXPECT_EQ(part.info.binary_size, enabled ? 170u : 178u);
+   EXPECT_EQ(part.info.stats.instrs, 22u);
+   EXPECT_EQ(part.info.binary_size, 170u);
    fprintf(stderr,"G16 CAPTURED: instructions=%u bytes=%u gprs=%u spills=%u\n",
       part.info.stats.instrs,part.info.binary_size,part.info.nr_gprs,part.info.stats.spills);
    free(part.binary);
@@ -7524,8 +7517,7 @@ TEST(NativeForms, G16NegativeZeroBoundaries)
                                 agx_uniform(16,AGX_SIZE_32),agx_immediate(imm));
          I->saturate=saturate;
          agx_lower_uniform_sources(b->shader);
-         bool eligible=saturate && imm==0x80 &&
-                       agx_g16_shared_nz_enabled();
+         bool eligible=saturate && imm==0x80;
          EXPECT_EQ(I->src[0].type,eligible ? AGX_INDEX_UNIFORM : AGX_INDEX_NORMAL);
          EXPECT_EQ(I->saturate,saturate);
          EXPECT_EQ(I->op,AGX_OPCODE_FADD);

@@ -85,12 +85,6 @@ agx_pad_binary(struct util_dynarray *dyn, uint32_t align)
    return dyn->size;
 }
 
-bool
-agx_g16_shared_nz_enabled(void)
-{
-   return debug_get_bool_option("ASAHI_G16_SHARED_NZ", true);
-}
-
 uint64_t
 agx_get_compiler_debug(void)
 {

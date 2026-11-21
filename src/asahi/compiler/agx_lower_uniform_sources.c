@@ -737,8 +737,7 @@ agx_lower_uniform_sources(agx_context *ctx)
 {
    /* Preserve the exact f32 add and saturation. Only change which operand
     * satisfies the existing mixed uniform/GPR encoding contract. */
-   if (ctx->key->dev.chip == AGX_CHIP_G16G && !ctx->is_preamble &&
-       agx_g16_shared_nz_enabled()) {
+   if (ctx->key->dev.chip == AGX_CHIP_G16G && !ctx->is_preamble) {
       agx_foreach_block(ctx, block) {
          agx_index zero = agx_null();
          agx_foreach_instr_in_block_safe(block, I) {
