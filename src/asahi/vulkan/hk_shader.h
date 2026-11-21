@@ -613,7 +613,7 @@ hk_main_mesh_variant(struct hk_api_shader *obj)
     AGX_USC_REGISTERS_LENGTH + AGX_USC_SHADER_LENGTH + AGX_USC_SHARED_LENGTH + \
     AGX_USC_SAMPLER_LENGTH + (AGX_USC_UNIFORM_LENGTH * 9))
 
-/* G16G (ASAHI_G16_HOST_BLEND_SRC=0 opts out): uniform-only fp32 arithmetic of an
+/* G16G: uniform-only fp32 arithmetic of an
  * inline-blend fragment program, evaluated on the host for each draw and
  * delivered in uniform halves [0, 2 * n_out) from the root's g16_host_unif.
  * G16G forms no native constant program (agx_chip_native_preamble()), so

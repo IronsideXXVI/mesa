@@ -7334,8 +7334,7 @@ static bool
 hk_g16_host_eval_allowed(const struct hk_device *dev,
                          const struct agx_fs_epilog_key *ekey)
 {
-   if (dev->dev.chip != AGX_CHIP_G16G ||
-       !agx_g16_host_blend_src_enabled() || ekey->native_spills)
+   if (dev->dev.chip != AGX_CHIP_G16G || ekey->native_spills)
       return false;
    /* hk_g16_host_eval flushes fp32 denormals like the GPU, so host and GPU
     * differ at most in NaN payloads, which no UNORM store can observe. */
