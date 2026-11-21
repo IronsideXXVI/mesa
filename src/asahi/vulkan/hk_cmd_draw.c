@@ -6696,16 +6696,36 @@ hk_part_disk_get(struct hk_device *dev, const cache_key disk_key, void *mem_ctx)
    return part;
 }
 
+/* A monolithic fragment program with host evaluation is stored with its
+ * hk_g16_host_prog after the binary (hk_mono_part_from_blob()). The copy is
+ * rebuilt field by field so no padding byte reaches the cache. */
 static void
 hk_part_disk_put(struct hk_device *dev, const cache_key disk_key,
-                 const struct agx_shader_part *part)
+                 const struct agx_shader_part *part,
+                 const struct hk_g16_host_prog *host)
 {
-   const size_t size = sizeof(part->info) + part->info.binary_size;
+   const size_t part_size = sizeof(part->info) + part->info.binary_size;
+   const size_t size = part_size + (host ? sizeof(*host) : 0);
    uint8_t *data = malloc(size);
    if (!data)
       return;
    memcpy(data, &part->info, sizeof(part->info));
    memcpy(data + sizeof(part->info), part->binary, part->info.binary_size);
+   if (host) {
+      struct hk_g16_host_prog h;
+      memset(&h, 0, sizeof(h));
+      h.n_ops = host->n_ops;
+      h.n_out = host->n_out;
+      memcpy(h.out, host->out, sizeof(h.out));
+      for (unsigned i = 0; i < host->n_ops; ++i) {
+         h.ops[i].opcode = host->ops[i].opcode;
+         for (unsigned j = 0; j < ARRAY_SIZE(h.ops[i].src); ++j) {
+            h.ops[i].src[j].kind = host->ops[i].src[j].kind;
+            h.ops[i].src[j].value = host->ops[i].src[j].value;
+         }
+      }
+      memcpy(data + part_size, &h, sizeof(h));
+   }
    disk_cache_put(dev->vk.physical->disk_cache, disk_key, data, size, NULL);
    free(data);
 }
@@ -6869,7 +6889,7 @@ hk_get_prolog_epilog_locked(struct hk_device *dev, struct hk_internal_key *key,
    }
 
    if (disk)
-      hk_part_disk_put(dev, disk_key, part);
+      hk_part_disk_put(dev, disk_key, part, NULL);
    return part;
 }
 
@@ -7224,7 +7244,7 @@ hk_g17p_mono_disk_key(struct hk_device *dev, const struct hk_shader *shader,
    if (partitions)
       memcpy(parts, partitions, sizeof(parts));
 
-   const char magic[8] = "hkmono3";
+   const char magic[8] = "hkmono4";
    const size_t rodata_size =
       shader->b.binary ? shader->b.info.rodata.size_16 * 2 : 0;
    const size_t size = sizeof(magic) + sizeof(shader->g17p_mono_key) +
@@ -7579,6 +7599,58 @@ hk_g16_host_eval(const struct hk_g16_host_prog *p, const uint8_t *root,
    }
 }
 
+/* A host program read back from the disk cache is only used if it is one
+ * hk_g16_host_lower() could have built: every index in range, temporaries
+ * read only before they are written, root reads inside the push constants. */
+static bool
+hk_g16_host_prog_valid(const struct hk_g16_host_prog *p)
+{
+   if (p->n_ops > HK_G16_HOST_MAX_OPS || p->n_out > HK_G16_HOST_MAX_OUT ||
+       (!p->n_out && p->n_ops))
+      return false;
+   for (unsigned k = 0; k < p->n_out; ++k) {
+      if (p->out[k] >= p->n_ops)
+         return false;
+   }
+   const uint32_t push = hk_root_descriptor_offset(push);
+   for (unsigned i = 0; i < p->n_ops; ++i) {
+      if (p->ops[i].opcode > HK_G16_HOST_MOV)
+         return false;
+      for (unsigned j = 0; j < hk_g16_host_num_srcs(p->ops[i].opcode); ++j) {
+         const struct hk_g16_host_src *s = &p->ops[i].src[j];
+         if (s->kind == HK_G16_HOST_TEMP ? s->value >= i
+             : s->kind == HK_G16_HOST_ROOT
+                ? (s->value & 3) || s->value < push ||
+                     s->value + 4 > push + HK_MAX_PUSH_SIZE
+                : s->kind != HK_G16_HOST_IMM)
+            return false;
+      }
+   }
+   return true;
+}
+
+/* Inverse of hk_part_disk_put(): with `host`, the blob must end in a valid
+ * hk_g16_host_prog; anything else is a miss. */
+static struct agx_shader_part *
+hk_mono_part_from_blob(const uint8_t *data, size_t size,
+                       struct hk_g16_host_prog *host)
+{
+   if (host) {
+      if (size < sizeof(*host))
+         return NULL;
+      size -= sizeof(*host);
+      memcpy(host, data + size, sizeof(*host));
+      if (!hk_g16_host_prog_valid(host)) {
+         memset(host, 0, sizeof(*host));
+         return NULL;
+      }
+   }
+   struct agx_shader_part *part = hk_part_from_blob(data, size, NULL);
+   if (!part && host)
+      memset(host, 0, sizeof(*host));
+   return part;
+}
+
 static struct agx_shader_part *
 hk_g17p_inline_epilog_part(struct hk_device *dev, struct hk_shader *shader,
                            const struct agx_fs_epilog_key *ekey,
@@ -7615,13 +7687,13 @@ hk_g17p_inline_epilog_part(struct hk_device *dev, struct hk_shader *shader,
        MAX2(ekey->nr_samples, 1) != main_samples)
       HK_MONO_REFUSE("epilog shape");
 
-   /* Host-evaluated programs are not stored: their host half lives in the
-    * linked shader only. */
+   /* Whether host evaluation is allowed depends only on what the disk key
+    * hashes (chip and epilog key), so an entry is either always or never
+    * followed by its host program (hk_part_disk_put()). */
    memset(host, 0, sizeof(*host));
    const bool host_eval = !inline_samples &&
                           hk_g16_host_eval_allowed(dev, ekey);
-   disk = !host_eval &&
-          hk_g17p_mono_disk_key(dev, shader, ekey, partitions, disk_key);
+   disk = hk_g17p_mono_disk_key(dev, shader, ekey, partitions, disk_key);
    if (disk) {
       size_t size = 0;
       uint8_t *data =
@@ -7629,7 +7701,9 @@ hk_g17p_inline_epilog_part(struct hk_device *dev, struct hk_shader *shader,
       if (data) {
          const bool refused = size == sizeof(refused_marker) &&
                               !memcmp(data, refused_marker, size);
-         part = refused ? NULL : hk_part_from_blob(data, size, NULL);
+         part = refused ? NULL
+                        : hk_mono_part_from_blob(data, size,
+                                                 host_eval ? host : NULL);
          free(data);
          if (refused)
             HK_MONO_FAIL("refused before");
@@ -7854,7 +7928,7 @@ hk_g17p_inline_epilog_part(struct hk_device *dev, struct hk_shader *shader,
       HK_MONO_REFUSE(why);
 
    if (disk)
-      hk_part_disk_put(dev, disk_key, part);
+      hk_part_disk_put(dev, disk_key, part, host_eval ? host : NULL);
    ralloc_free(mem);
    return part;
 
