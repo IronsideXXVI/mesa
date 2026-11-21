@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <stdlib.h>
 #include <vector>
 #include <gtest/gtest.h>
 #include "agx_builder.h"
@@ -88,7 +87,6 @@ expect_unchanged(enum agx_chip chip, mesa_shader_stage stage, bool preamble)
  * the wait, even though they also read uniforms. */
 TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
 {
-   unsetenv("ASAHI_G16_PIX_HOIST");
    hoist_case c;
    build(c, AGX_CHIP_G16G, MESA_SHADER_FRAGMENT);
 
@@ -112,7 +110,6 @@ TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
  * block without WAIT_PIX is left alone. */
 TEST(G16PixelHoist, NothingAfterWaitOrNoWait)
 {
-   unsetenv("ASAHI_G16_PIX_HOIST");
    void *mem = ralloc_context(nullptr);
    agx_shader_key key = {};
    key.dev.chip = AGX_CHIP_G16G;
@@ -139,7 +136,6 @@ TEST(G16PixelHoist, NothingAfterWaitOrNoWait)
 /* Only G16G fragment main programs are touched. */
 TEST(G16PixelHoist, OtherChipsStagesAndPreamblesUnchanged)
 {
-   unsetenv("ASAHI_G16_PIX_HOIST");
    for (enum agx_chip chip : {AGX_CHIP_G13G, AGX_CHIP_G13X, AGX_CHIP_G14G,
                               AGX_CHIP_G14X, AGX_CHIP_G17P})
       expect_unchanged(chip, MESA_SHADER_FRAGMENT, false);
@@ -148,10 +144,16 @@ TEST(G16PixelHoist, OtherChipsStagesAndPreamblesUnchanged)
    expect_unchanged(AGX_CHIP_G16G, MESA_SHADER_FRAGMENT, true);
 }
 
-/* ASAHI_G16_PIX_HOIST=0 keeps the scheduled order on G16G. */
-TEST(G16PixelHoist, OptOut)
+/* A uniform write after the wait stops the scan: nothing after it reads its
+ * uniforms earlier than scheduled. */
+TEST(G16PixelHoist, StopsAtUniformWrite)
 {
-   setenv("ASAHI_G16_PIX_HOIST", "0", 1);
-   expect_unchanged(AGX_CHIP_G16G, MESA_SHADER_FRAGMENT, false);
-   unsetenv("ASAHI_G16_PIX_HOIST");
+   hoist_case c;
+   build(c, AGX_CHIP_G16G, MESA_SHADER_FRAGMENT);
+   agx_builder sb = agx_init_builder(c.b->shader, agx_after_instr(c.wait));
+   agx_uniform_store(&sb, agx_immediate(0), agx_immediate(4), 0x3);
+   const std::vector<agx_instr *> before = order(c.b->shader);
+   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(c.b->shader));
+   EXPECT_EQ(order(c.b->shader), before);
+   ralloc_free(c.mem);
 }

@@ -88,18 +88,6 @@ agx_get_compiler_debug(void)
    return debug_get_option_agx_compiler_debug();
 }
 
-bool
-agx_g16_pix_hoist_enabled(void)
-{
-   return debug_get_bool_option("ASAHI_G16_PIX_HOIST", true);
-}
-
-bool
-agx_g16_blend_dst_first_enabled(void)
-{
-   return debug_get_bool_option("ASAHI_G16_BLEND_DST_FIRST", true);
-}
-
 /* The last compile refusal of this thread. It lives in thread-specific storage
  * rather than a __thread array: libgallium and libvulkan_asahi use the
  * initial-exec TLS model, and a dlopen() of either only gets glibc's small
@@ -11077,20 +11065,35 @@ agx3_coalesce_uniform_half_stores(agx_context *ctx)
  * adjacent run of non-coherent loads with identical operation and base; SSA
  * keeps their consumers attached to the correct result and no serialization
  * is introduced. */
-/* G16G (ASAHI_G16_PIX_HOIST=0 opts out): after scheduling, move
+/* G16G: after scheduling, move
  * float arithmetic computed only from uniforms ahead of the first
  * pixel-ordering wait of its block, so it executes outside the ordered colour
  * transaction instead of between WAIT_PIX and the tile store. Only fadd, fmul,
  * ffma and mov_imm move, and only when every source is a uniform, an
  * immediate, or the result of another such instruction. Moved instructions
  * keep their relative order and their exact operations, modifiers and
- * operands, so results are bit-identical. */
+ * operands, so results are bit-identical.
+ *
+ * A moved instruction reads its uniforms earlier than scheduled, so it must not
+ * cross a write to the uniform file. The scan of a block stops at the first
+ * such write after the wait; nothing after it moves. */
+static bool
+agx_writes_uniform(const agx_instr *I)
+{
+   if (I->op == AGX_OPCODE_UNIFORM_STORE)
+      return true;
+   agx_foreach_dest(I, d) {
+      if (I->dest[d].type == AGX_INDEX_UNIFORM)
+         return true;
+   }
+   return false;
+}
+
 bool
 agx3_g16_hoist_pixel_independent(agx_context *ctx)
 {
    if (ctx->key->dev.chip != AGX_CHIP_G16G ||
-       ctx->stage != MESA_SHADER_FRAGMENT || ctx->is_preamble ||
-       !agx_g16_pix_hoist_enabled())
+       ctx->stage != MESA_SHADER_FRAGMENT || ctx->is_preamble)
       return false;
 
    /* Values computed only from uniforms and immediates by the movable ops,
@@ -11108,6 +11111,9 @@ agx3_g16_hoist_pixel_independent(agx_context *ctx)
             wait = I;
             continue;
          }
+
+         if (wait && agx_writes_uniform(I))
+            break;
 
          bool uniform_only = (I->op == AGX_OPCODE_FADD ||
                               I->op == AGX_OPCODE_FMUL ||
