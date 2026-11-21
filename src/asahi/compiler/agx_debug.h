@@ -37,9 +37,6 @@ enum agx_compiler_dbg {
 
 uint64_t agx_get_compiler_debug(void);
 
-/* Qualified on G16G; ASAHI_G16_BORDER_TWIN=0 keeps the custom-border emulation in
- * every G16G texture sample instead of compiling border-free twins. */
-bool agx_g16_border_twin_enabled(void);
 
 /* Why the last agx_compile_shader_nir() on this thread returned false
  * ("" when it succeeded), for the driver's "cannot encode" error. */

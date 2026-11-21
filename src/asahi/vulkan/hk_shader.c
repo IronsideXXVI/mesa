@@ -210,8 +210,7 @@ hk_physical_device_compiler_flags(const struct hk_physical_device *pdev)
 {
    /* This could be optimized but it doesn't matter. */
    return pdev->dev.debug |
-          hk_fs_structure_key_bits() |
-          ((uint64_t)!!agx_g16_border_twin_enabled() << 35);
+          hk_fs_structure_key_bits();
 }
 
 const nir_shader_compiler_options *
@@ -7081,7 +7080,7 @@ hk_compile_shader_impl(struct hk_device *dev, struct vk_shader_compile_info *inf
        * already recorded border-free draw, so those devices keep the
        * emulation (the feature is part of the shader key). */
       const bool g16_twin =
-         dev->dev.chip == AGX_CHIP_G16G && agx_g16_border_twin_enabled() &&
+         dev->dev.chip == AGX_CHIP_G16G &&
          !(features & HK_FEAT_SAMPLED_IMAGE_UPDATE_AFTER_BIND);
       if (hk_find_border_emulation(nir, &ifs, dev->dev.chip == AGX_CHIP_G17P,
                                    g16_twin) &&
