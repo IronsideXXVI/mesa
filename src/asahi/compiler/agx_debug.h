@@ -37,7 +37,6 @@ enum agx_compiler_dbg {
 
 uint64_t agx_get_compiler_debug(void);
 
-
 /* Why the last agx_compile_shader_nir() on this thread returned false
  * ("" when it succeeded), for the driver's "cannot encode" error. */
 const char *agx_last_compile_refusal(void);
