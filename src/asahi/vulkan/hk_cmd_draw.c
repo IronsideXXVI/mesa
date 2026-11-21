@@ -7354,7 +7354,11 @@ static bool
 hk_g16_host_eval_allowed(const struct hk_device *dev,
                          const struct agx_fs_epilog_key *ekey)
 {
-   if (dev->dev.chip != AGX_CHIP_G16G || ekey->native_spills)
+   /* Only worth it where no constant program takes uniform-only work. Run on
+    * G16G hardware only. */
+   const enum agx_chip chip = dev->dev.chip;
+   if (!agx_chip_native_agx3(chip) || agx_chip_native_preamble(chip) ||
+       ekey->native_spills)
       return false;
    /* hk_g16_host_eval flushes fp32 denormals like the GPU, so host and GPU
     * differ at most in NaN payloads. hk_g16_host_lower() lets only float ALU
