@@ -34,9 +34,6 @@ enum agx_compiler_dbg {
 
 uint64_t agx_get_compiler_debug(void);
 
-/* Qualified on G16G; ASAHI_G16_HOST_BLEND_SRC=0 restores per-pixel evaluation
- * of uniform-only inline-blend fragment arithmetic. */
-bool agx_g16_host_blend_src_enabled(void);
 /* Qualified on G16G; ASAHI_G16_BORDER_TWIN=0 keeps the custom-border emulation in
  * every G16G texture sample instead of compiling border-free twins. */
 bool agx_g16_border_twin_enabled(void);
