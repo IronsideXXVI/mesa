@@ -212,7 +212,6 @@ hk_physical_device_compiler_flags(const struct hk_physical_device *pdev)
    /* This could be optimized but it doesn't matter. */
    return pdev->dev.debug |
           hk_fs_structure_key_bits() |
-          ((uint64_t)!!agx_g16_pix_hoist_enabled() << 33) |
           ((uint64_t)!!agx_g16_host_blend_src_enabled() << 34);
 }
 
