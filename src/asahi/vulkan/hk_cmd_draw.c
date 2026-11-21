@@ -7337,7 +7337,8 @@ hk_g16_host_eval_allowed(const struct hk_device *dev,
    if (dev->dev.chip != AGX_CHIP_G16G || ekey->native_spills)
       return false;
    /* hk_g16_host_eval flushes fp32 denormals like the GPU, so host and GPU
-    * differ at most in NaN payloads, which no UNORM store can observe. */
+    * differ at most in NaN payloads. hk_g16_host_lower() lets only float ALU
+    * sources read a host result, and no UNORM store can observe a payload. */
    for (unsigned rt = 0; rt < ARRAY_SIZE(ekey->rt_formats); ++rt) {
       const enum pipe_format f = ekey->rt_formats[rt];
       if (f != PIPE_FORMAT_NONE &&
@@ -7435,10 +7436,35 @@ hk_g16_host_classify(const struct hk_shader *shader, struct hash_table *temps,
    return true;
 }
 
+/* Whether `use` of a host-evaluated result is a float-typed source of an ALU
+ * instruction that computes a new value from it. Branches, intrinsics and
+ * untyped or integer sources see the bits as they are, NaN payload included;
+ * fneg and fabs only change the sign bit and pass the rest through. */
+static bool
+hk_g16_host_float_use(const nir_src *use)
+{
+   if (nir_src_is_if(use))
+      return false;
+   nir_instr *user = nir_src_use_instr(use);
+   if (user->type != nir_instr_type_alu)
+      return false;
+   const nir_alu_instr *alu = nir_instr_as_alu(user);
+   if (alu->op == nir_op_fneg || alu->op == nir_op_fabs)
+      return false;
+   const nir_op_info *info = &nir_op_infos[alu->op];
+   for (unsigned i = 0; i < info->num_inputs; ++i) {
+      if (&alu->src[i].src == use)
+         return nir_alu_type_get_base_type(info->input_types[i]) ==
+                nir_type_float;
+   }
+   return false;
+}
+
 /* Take the uniform-only exact fp32 arithmetic of `nir` into `prog` and have
  * the program load its results from uniform halves [0, 2 * prog->n_out).
  * Returns false, leaving the program's instructions as they were, when there
- * is nothing to take or the halves are not free. */
+ * is nothing to take, the halves are not free, or a result is read other than
+ * as a float ALU source (hk_g16_host_float_use()). */
 static bool
 hk_g16_host_lower(nir_shader *nir, const struct hk_shader *shader,
                   struct hk_g16_host_prog *prog)
@@ -7507,18 +7533,25 @@ hk_g16_host_lower(nir_shader *nir, const struct hk_shader *shader,
       }
    }
 
-   /* Results some program instruction still reads. */
+   /* Results some program instruction still reads. Each such read must be a
+    * float ALU source: any other reader would observe the exact bits,
+    * including a NaN payload the host need not reproduce, so refuse the whole
+    * program rather than take part of it. */
    for (unsigned i = 0; i < prog->n_ops; ++i) {
       bool frontier = false;
       nir_foreach_use_including_if(use, defs[i]) {
-         if (nir_src_is_if(use)) {
-            frontier = true;
-            continue;
+         if (!nir_src_is_if(use)) {
+            nir_instr *user = nir_src_use_instr(use);
+            if (user->type == nir_instr_type_alu &&
+                _mesa_hash_table_search(temps, &nir_instr_as_alu(user)->def))
+               continue;
          }
-         nir_instr *user = nir_src_use_instr(use);
-         if (user->type != nir_instr_type_alu ||
-             !_mesa_hash_table_search(temps, &nir_instr_as_alu(user)->def))
-            frontier = true;
+         frontier = true;
+         if (!hk_g16_host_float_use(use)) {
+            _mesa_hash_table_destroy(temps, NULL);
+            memset(prog, 0, sizeof(*prog));
+            return false;
+         }
       }
       if (!frontier)
          continue;
