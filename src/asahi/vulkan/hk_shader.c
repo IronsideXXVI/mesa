@@ -7090,10 +7090,11 @@ hk_compile_shader_impl(struct hk_device *dev, struct vk_shader_compile_info *inf
       /* The two-load form of the test is a property of the descriptor
        * layout, not of one chip. On this path that is G15G/S/C, G16G and
        * G17P (agx_native_graphics()). */
-      const bool gen9_two_load =
-         twin_safe && agx_chip_descriptor_generation(dev->dev.chip) ==
-                         AGX_DESCRIPTOR_GENERATION_9;
-      if (hk_find_border_emulation(nir, &ifs, dev->dev.chip == AGX_CHIP_G17P,
+      const bool gen9_two_load = agx_chip_descriptor_generation(
+                                    dev->dev.chip) ==
+                                 AGX_DESCRIPTOR_GENERATION_9;
+      if (twin_safe &&
+          hk_find_border_emulation(nir, &ifs, dev->dev.chip == AGX_CHIP_G17P,
                                    gen9_two_load) &&
           ifs.size) {
          if (twin_of || p_atomic_read(&pdev->border_emulation)) {
