@@ -748,8 +748,12 @@ agx_lower_uniform_sources(agx_context *ctx)
     *   measured with, the low half of the uniform file (the `high` split in
     *   agx_instr_accepts_uniform()); a high-half uniform keeps the existing
     *   copy.
+    *
+    * The limit belongs to the AGX3B encoding, and the copy below that this
+    * avoids is keyed on that encoding, so the pass is too. It has been run
+    * on G16G hardware only.
     */
-   if (ctx->key->dev.chip == AGX_CHIP_G16G && !ctx->is_preamble) {
+   if (ctx->key->dev.encoding == AGX_ISA_ENCODING_AGX3B && !ctx->is_preamble) {
       agx_foreach_block(ctx, block) {
          agx_index zero = agx_null();
          agx_foreach_instr_in_block_safe(block, I) {

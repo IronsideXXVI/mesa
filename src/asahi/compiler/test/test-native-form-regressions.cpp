@@ -7436,11 +7436,14 @@ TEST(NativeForms, Agx3bFfmaKeepsUnmodifiedHalfGprNative)
 
 TEST(NativeForms, G16SharedNegativeZero)
 {
+   for (enum agx_chip chip : {AGX_CHIP_G15G, AGX_CHIP_G16G, AGX_CHIP_G17P}) {
+   SCOPED_TRACE(chip);
    void *mem = ralloc_context(NULL);
    agx_builder *b = agx_test_builder(mem);
    agx_shader_key key = {};
-   key.dev.encoding = AGX_ISA_ENCODING_AGX3B;
-   key.dev.chip = AGX_CHIP_G16G;
+   key.dev.encoding = agx_chip_isa_encoding(chip);
+   ASSERT_EQ(key.dev.encoding, AGX_ISA_ENCODING_AGX3B);
+   key.dev.chip = chip;
    b->shader->key = &key;
    agx_instr *adds[4];
    for (unsigned c = 0; c < 4; ++c) {
@@ -7463,6 +7466,7 @@ TEST(NativeForms, G16SharedNegativeZero)
    }
    EXPECT_EQ(zeros, 1u);
    ralloc_free(mem);
+   }
 }
 
 TEST(NativeForms, G16CapturedBlend)
