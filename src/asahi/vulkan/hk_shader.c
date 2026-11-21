@@ -7074,14 +7074,20 @@ hk_compile_shader_impl(struct hk_device *dev, struct vk_shader_compile_info *inf
       struct hk_physical_device *pdev = hk_device_physical(dev);
       struct util_dynarray ifs;
       util_dynarray_init(&ifs, NULL);
-      /* G16G: a twin is chosen when the shader is compiled and replaced when
-       * a command buffer binds it or draws after a border sampler exists.
-       * Update-after-bind sampled images could put such a sampler under an
-       * already recorded border-free draw, so those devices keep the
-       * emulation (the feature is part of the shader key). */
-      const bool g16_twin =
-         dev->dev.chip == AGX_CHIP_G16G &&
-         !(features & HK_FEAT_SAMPLED_IMAGE_UPDATE_AFTER_BIND);
+      /* A twin is chosen when the shader is compiled and replaced when a
+       * command buffer binds it or draws after a border sampler exists.
+       * Update-after-bind sampled images can put such a sampler under an
+       * already recorded border-free draw, so a device that enables them
+       * keeps the emulation; decide that from the device, as the combined
+       * sampler lowering does. A shader object has no features to go by
+       * (vk_features is NULL) and its binary must not depend on them, so it
+       * keeps the emulation too. A twin follows the shader it stands in for.
+       */
+      const bool twin_safe =
+         twin_of != NULL ||
+         (vk_features != NULL &&
+          !dev->vk.enabled_features.descriptorBindingSampledImageUpdateAfterBind);
+      const bool g16_twin = dev->dev.chip == AGX_CHIP_G16G && twin_safe;
       if (hk_find_border_emulation(nir, &ifs, dev->dev.chip == AGX_CHIP_G17P,
                                    g16_twin) &&
           ifs.size) {
