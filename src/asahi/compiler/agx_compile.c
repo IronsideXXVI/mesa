@@ -11478,7 +11478,8 @@ agx3_coalesce_uniform_half_stores(agx_context *ctx)
  * adjacent run of non-coherent loads with identical operation and base; SSA
  * keeps their consumers attached to the correct result and no serialization
  * is introduced. */
-/* G16G: after scheduling, move
+/* Native AGX3 chips without a constant program (G15G/S/C, G16G; see
+ * agx_chip_native_preamble()): after scheduling, move
  * float arithmetic computed only from uniforms ahead of the first
  * pixel-ordering wait of its block, so it executes outside the ordered colour
  * transaction instead of between WAIT_PIX and the tile store. Only fadd, fmul,
@@ -11505,7 +11506,10 @@ agx_writes_uniform(const agx_instr *I)
 bool
 agx3_g16_hoist_pixel_independent(agx_context *ctx)
 {
-   if (ctx->key->dev.chip != AGX_CHIP_G16G ||
+   /* A chip with a constant program takes the uniform-only work there. The
+    * hoist has been run on G16G hardware only. */
+   const enum agx_chip chip = ctx->key->dev.chip;
+   if (!agx_chip_native_agx3(chip) || agx_chip_native_preamble(chip) ||
        ctx->stage != MESA_SHADER_FRAGMENT || ctx->is_preamble)
       return false;
 
