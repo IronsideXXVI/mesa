@@ -87,8 +87,11 @@ expect_unchanged(enum agx_chip chip, mesa_shader_stage stage, bool preamble)
  * the wait, even though they also read uniforms. */
 TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
 {
+   for (enum agx_chip chip : {AGX_CHIP_G15G, AGX_CHIP_G15S, AGX_CHIP_G15C,
+                              AGX_CHIP_G16G}) {
+   SCOPED_TRACE(chip);
    hoist_case c;
-   build(c, AGX_CHIP_G16G, MESA_SHADER_FRAGMENT);
+   build(c, chip, MESA_SHADER_FRAGMENT);
 
    EXPECT_TRUE(agx3_g16_hoist_pixel_independent(c.b->shader));
    const std::vector<agx_instr *> expected = {
@@ -104,6 +107,7 @@ TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
    EXPECT_FALSE(agx3_g16_hoist_pixel_independent(c.b->shader));
    EXPECT_EQ(order(c.b->shader), expected);
    ralloc_free(c.mem);
+   }
 }
 
 /* Uniform-only operations already ahead of the wait are not reordered, and a
@@ -133,7 +137,8 @@ TEST(G16PixelHoist, NothingAfterWaitOrNoWait)
    ralloc_free(mem);
 }
 
-/* Only G16G fragment main programs are touched. */
+/* Only fragment main programs on native chips without a constant program
+ * are touched. */
 TEST(G16PixelHoist, OtherChipsStagesAndPreamblesUnchanged)
 {
    for (enum agx_chip chip : {AGX_CHIP_G13G, AGX_CHIP_G13X, AGX_CHIP_G14G,
