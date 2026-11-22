@@ -7518,16 +7518,42 @@ TEST(NativeForms, G16NegativeZeroBoundaries)
          key.dev.chip=AGX_CHIP_G16G;
          key.dev.encoding=AGX_ISA_ENCODING_AGX3B;
          b->shader->key=&key;
-         agx_instr *I=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
-                                agx_uniform(16,AGX_SIZE_32),agx_immediate(imm));
-         I->saturate=saturate;
+         agx_instr *adds[2];
+         for (unsigned c=0; c<2; ++c) {
+            adds[c]=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                                agx_uniform(16+2*c,AGX_SIZE_32),agx_immediate(imm));
+            adds[c]->saturate=saturate;
+         }
          agx_lower_uniform_sources(b->shader);
          bool eligible=saturate && imm==0x80;
-         EXPECT_EQ(I->src[0].type,eligible ? AGX_INDEX_UNIFORM : AGX_INDEX_NORMAL);
-         EXPECT_EQ(I->saturate,saturate);
-         EXPECT_EQ(I->op,AGX_OPCODE_FADD);
+         for (agx_instr *I : adds) {
+            EXPECT_EQ(I->src[0].type,eligible ? AGX_INDEX_UNIFORM : AGX_INDEX_NORMAL);
+            EXPECT_EQ(I->saturate,saturate);
+            EXPECT_EQ(I->op,AGX_OPCODE_FADD);
+         }
          ralloc_free(mem);
       }
+   }
+   /* A lone clamp in a block keeps the uniform copy: sharing -0.0 would
+    * add a mov_imm and save no instruction. */
+   {
+      void *mem=ralloc_context(NULL);
+      agx_builder *b=agx_test_builder(mem);
+      agx_shader_key key={};
+      key.dev.chip=AGX_CHIP_G16G;
+      key.dev.encoding=AGX_ISA_ENCODING_AGX3B;
+      b->shader->key=&key;
+      agx_instr *I=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                             agx_uniform(16,AGX_SIZE_32),agx_negzero());
+      I->saturate=true;
+      agx_lower_uniform_sources(b->shader);
+      EXPECT_EQ(I->src[0].type,AGX_INDEX_NORMAL);
+      unsigned zeros=0;
+      agx_foreach_instr_global(b->shader, J) {
+         if (J->op==AGX_OPCODE_MOV_IMM && J->imm==0x80000000) zeros++;
+      }
+      EXPECT_EQ(zeros,0u);
+      ralloc_free(mem);
    }
    /* The rewritten operands must have a native AGX3B encoding: the aligned
     * f32 uniform in src0 and a register in src1, saturated. */
@@ -7541,7 +7567,11 @@ TEST(NativeForms, G16NegativeZeroBoundaries)
       agx_instr *I=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
                              agx_uniform(16,AGX_SIZE_32),agx_negzero());
       I->saturate=true;
+      agx_instr *I2=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                              agx_uniform(18,AGX_SIZE_32),agx_negzero());
+      I2->saturate=true;
       agx_lower_uniform_sources(b->shader);
+      ASSERT_EQ(I2->src[0].type,AGX_INDEX_UNIFORM);
       ASSERT_EQ(I->src[0].type,AGX_INDEX_UNIFORM);
       ASSERT_EQ(I->src[1].type,AGX_INDEX_NORMAL);
       struct agx3_uniform_float_src src[3]={};
