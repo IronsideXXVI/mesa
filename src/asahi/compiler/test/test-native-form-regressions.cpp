@@ -7555,6 +7555,67 @@ TEST(NativeForms, G16NegativeZeroBoundaries)
       EXPECT_EQ(zeros,0u);
       ralloc_free(mem);
    }
+   /* Clamps in different blocks count separately: one eligible clamp in
+    * each of two blocks shares nothing, and both keep their uniform copies. */
+   {
+      void *mem=ralloc_context(NULL);
+      agx_builder *b=agx_test_builder(mem);
+      agx_shader_key key={};
+      key.dev.chip=AGX_CHIP_G16G;
+      key.dev.encoding=AGX_ISA_ENCODING_AGX3B;
+      b->shader->key=&key;
+      agx_block *entry=agx_start_block(b->shader);
+      agx_block *next=agx_test_block(b->shader);
+      agx_block_add_successor(entry,next);
+      b->cursor=agx_after_block(entry);
+      agx_instr *I=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                             agx_uniform(16,AGX_SIZE_32),agx_negzero());
+      I->saturate=true;
+      b->cursor=agx_after_block(next);
+      agx_instr *I2=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                              agx_uniform(18,AGX_SIZE_32),agx_negzero());
+      I2->saturate=true;
+      agx_lower_uniform_sources(b->shader);
+      for (agx_instr *J : {I,I2}) {
+         EXPECT_EQ(J->src[0].type,AGX_INDEX_NORMAL);
+         EXPECT_TRUE(agx_is_equiv(J->src[1],agx_negzero()));
+         EXPECT_TRUE(J->saturate);
+      }
+      unsigned zeros=0;
+      agx_foreach_instr_global(b->shader, J) {
+         if (J->op==AGX_OPCODE_MOV_IMM && J->imm==0x80000000) zeros++;
+      }
+      EXPECT_EQ(zeros,0u);
+      ralloc_free(mem);
+   }
+   /* An odd-half uniform is not counted: one eligible clamp and one odd-half
+    * clamp in a block leave a single match, so nothing is shared. */
+   {
+      void *mem=ralloc_context(NULL);
+      agx_builder *b=agx_test_builder(mem);
+      agx_shader_key key={};
+      key.dev.chip=AGX_CHIP_G16G;
+      key.dev.encoding=AGX_ISA_ENCODING_AGX3B;
+      b->shader->key=&key;
+      agx_instr *I=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                             agx_uniform(16,AGX_SIZE_32),agx_negzero());
+      I->saturate=true;
+      agx_instr *I2=agx_fadd_to(b,agx_temp(b->shader,AGX_SIZE_32),
+                              agx_uniform(17,AGX_SIZE_32),agx_negzero());
+      I2->saturate=true;
+      agx_lower_uniform_sources(b->shader);
+      EXPECT_EQ(I->src[0].type,AGX_INDEX_NORMAL);
+      for (agx_instr *J : {I,I2}) {
+         EXPECT_TRUE(agx_is_equiv(J->src[1],agx_negzero()));
+         EXPECT_TRUE(J->saturate);
+      }
+      unsigned zeros=0;
+      agx_foreach_instr_global(b->shader, J) {
+         if (J->op==AGX_OPCODE_MOV_IMM && J->imm==0x80000000) zeros++;
+      }
+      EXPECT_EQ(zeros,0u);
+      ralloc_free(mem);
+   }
    /* The rewritten operands must have a native AGX3B encoding: the aligned
     * f32 uniform in src0 and a register in src1, saturated. */
    {
