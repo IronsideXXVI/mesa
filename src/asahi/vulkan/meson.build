@@ -205,6 +205,12 @@ if with_tests
     include_directories : [include_directories('.'), inc_include, inc_src],
     dependencies : [idep_nir, idep_mesautil]), suite : ['asahi'])
 
+  test('hk_g16_host_use', executable('hk_g16_host_use_test',
+    files('tests/test-hk-g16-host-use.c', 'hk_g16_host_use.c'),
+    include_directories : [include_directories('.'), inc_include, inc_src,
+                           inc_asahi],
+    dependencies : [idep_nir, idep_mesautil]), suite : ['asahi'])
+
   test('hk_root_size', executable('hk_root_size_test',
     files('tests/test-hk-root-size.c', 'hk_nir_root_size.c'),
     include_directories : [include_directories('.'), inc_include, inc_src],
