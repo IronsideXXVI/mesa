@@ -1025,6 +1025,12 @@ hk_hash_graphics_state(struct vk_physical_device *device,
    if (agx_native_graphics(&pdev->dev) || agx_chip_g17_m5(pdev->dev.chip)) {
       const uint32_t border = p_atomic_read(&pdev->border_emulation);
       _mesa_blake3_update(&blake3_ctx, &border, sizeof(border));
+
+      /* The twin decision also depends on the device's descriptorBuffer
+       * feature. Update-after-bind is already in the feature key. */
+      const bool descriptor_buffer = features && features->descriptorBuffer;
+      _mesa_blake3_update(&blake3_ctx, &descriptor_buffer,
+                          sizeof(descriptor_buffer));
    }
 
    _mesa_blake3_final(&blake3_ctx, blake3_out);
@@ -7079,14 +7085,18 @@ hk_compile_shader_impl(struct hk_device *dev, struct vk_shader_compile_info *inf
        * Update-after-bind sampled images can put such a sampler under an
        * already recorded border-free draw, so a device that enables them
        * keeps the emulation; decide that from the device, as the combined
-       * sampler lowering does. A shader object has no features to go by
-       * (vk_features is NULL) and its binary must not depend on them, so it
-       * keeps the emulation too. A twin follows the shader it stands in for.
+       * sampler lowering does. Descriptor-buffer memory can be written up to
+       * submit, which has the same effect, so a device that enables
+       * descriptorBuffer keeps the emulation as well. A shader object has no
+       * features to go by (vk_features is NULL) and its binary must not
+       * depend on them, so it keeps the emulation too. A twin follows the
+       * shader it stands in for.
        */
       const bool twin_safe =
          twin_of != NULL ||
          (vk_features != NULL &&
-          !dev->vk.enabled_features.descriptorBindingSampledImageUpdateAfterBind);
+          !dev->vk.enabled_features.descriptorBindingSampledImageUpdateAfterBind &&
+          !dev->vk.enabled_features.descriptorBuffer);
       /* The two-load form of the test is a property of the descriptor
        * layout, not of one chip. On this path that is G15G/S/C, G16G and
        * G17P (agx_native_graphics()). */
