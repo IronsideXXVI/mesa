@@ -8,7 +8,7 @@
 #include "agx_builder.h"
 #include "agx_test.h"
 
-/* agx3_g16_hoist_pixel_independent runs after scheduling, so these cases pin
+/* agx3_hoist_pixel_independent runs after scheduling, so these cases pin
  * its dependency rules and its gates directly. */
 
 namespace {
@@ -74,7 +74,7 @@ expect_unchanged(enum agx_chip chip, mesa_shader_stage stage, bool preamble)
    hoist_case c;
    build(c, chip, stage, preamble);
    const std::vector<agx_instr *> before = order(c.b->shader);
-   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(c.b->shader));
+   EXPECT_FALSE(agx3_hoist_pixel_independent(c.b->shader));
    EXPECT_EQ(order(c.b->shader), before);
    ralloc_free(c.mem);
 }
@@ -85,7 +85,7 @@ expect_unchanged(enum agx_chip chip, mesa_shader_stage stage, bool preamble)
  * ahead of WAIT_PIX in its scheduled order. The tile load, the operation that
  * reads it and the operation that reads that result keep their places after
  * the wait, even though they also read uniforms. */
-TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
+TEST(Agx3PixelHoist, UniformChainMovesTileDependentStays)
 {
    for (enum agx_chip chip : {AGX_CHIP_G15G, AGX_CHIP_G15S, AGX_CHIP_G15C,
                               AGX_CHIP_G16G}) {
@@ -93,7 +93,7 @@ TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
    hoist_case c;
    build(c, chip, MESA_SHADER_FRAGMENT);
 
-   EXPECT_TRUE(agx3_g16_hoist_pixel_independent(c.b->shader));
+   EXPECT_TRUE(agx3_hoist_pixel_independent(c.b->shader));
    const std::vector<agx_instr *> expected = {
       c.mul, c.imm, c.add, c.fma, c.wait, c.tile, c.mix, c.mix2,
    };
@@ -104,7 +104,7 @@ TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
    EXPECT_EQ(c.fma->src[2].value, c.imm->dest[0].value);
 
    /* A second run finds nothing left to move. */
-   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(c.b->shader));
+   EXPECT_FALSE(agx3_hoist_pixel_independent(c.b->shader));
    EXPECT_EQ(order(c.b->shader), expected);
    ralloc_free(c.mem);
    }
@@ -112,7 +112,7 @@ TEST(G16PixelHoist, UniformChainMovesTileDependentStays)
 
 /* Uniform-only operations already ahead of the wait are not reordered, and a
  * block without WAIT_PIX is left alone. */
-TEST(G16PixelHoist, NothingAfterWaitOrNoWait)
+TEST(Agx3PixelHoist, NothingAfterWaitOrNoWait)
 {
    void *mem = ralloc_context(nullptr);
    agx_shader_key key = {};
@@ -127,19 +127,19 @@ TEST(G16PixelHoist, NothingAfterWaitOrNoWait)
                agx_uniform(8, AGX_SIZE_32), agx_immediate_f(1.0f));
 
    std::vector<agx_instr *> before = order(b->shader);
-   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(b->shader));
+   EXPECT_FALSE(agx3_hoist_pixel_independent(b->shader));
    EXPECT_EQ(order(b->shader), before);
 
    agx_wait_pix(b, 1);
    before = order(b->shader);
-   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(b->shader));
+   EXPECT_FALSE(agx3_hoist_pixel_independent(b->shader));
    EXPECT_EQ(order(b->shader), before);
    ralloc_free(mem);
 }
 
 /* Only fragment main programs on native chips without a constant program
  * are touched. */
-TEST(G16PixelHoist, OtherChipsStagesAndPreamblesUnchanged)
+TEST(Agx3PixelHoist, OtherChipsStagesAndPreamblesUnchanged)
 {
    for (enum agx_chip chip : {AGX_CHIP_G13G, AGX_CHIP_G13X, AGX_CHIP_G14G,
                               AGX_CHIP_G14X, AGX_CHIP_G17P})
@@ -151,14 +151,14 @@ TEST(G16PixelHoist, OtherChipsStagesAndPreamblesUnchanged)
 
 /* A uniform write after the wait stops the scan: nothing after it reads its
  * uniforms earlier than scheduled. */
-TEST(G16PixelHoist, StopsAtUniformWrite)
+TEST(Agx3PixelHoist, StopsAtUniformWrite)
 {
    hoist_case c;
    build(c, AGX_CHIP_G16G, MESA_SHADER_FRAGMENT);
    agx_builder sb = agx_init_builder(c.b->shader, agx_after_instr(c.wait));
    agx_uniform_store(&sb, agx_immediate(0), agx_immediate(4), 0x3);
    const std::vector<agx_instr *> before = order(c.b->shader);
-   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(c.b->shader));
+   EXPECT_FALSE(agx3_hoist_pixel_independent(c.b->shader));
    EXPECT_EQ(order(c.b->shader), before);
    ralloc_free(c.mem);
 }
@@ -184,7 +184,7 @@ peak_halves(agx_context *ctx)
  * halves live at the wait, past the first occupancy step (104 halves). The
  * pass moves a prefix of them, in order, and stops 8 halves below the step
  * (AGX3_HOIST_RA_MARGIN). */
-TEST(G16PixelHoist, StaysInsideOccupancyStep)
+TEST(Agx3PixelHoist, StaysInsideOccupancyStep)
 {
    void *mem = ralloc_context(nullptr);
    agx_shader_key key = {};
@@ -214,7 +214,7 @@ TEST(G16PixelHoist, StaysInsideOccupancyStep)
    const signed before = peak_halves(ctx);
    ASSERT_LE(before, 104 - 8);
 
-   EXPECT_TRUE(agx3_g16_hoist_pixel_independent(ctx));
+   EXPECT_TRUE(agx3_hoist_pixel_independent(ctx));
    EXPECT_LE(peak_halves(ctx), 104 - 8);
 
    /* The moved products are the first ones, in their order, ahead of the
@@ -231,7 +231,7 @@ TEST(G16PixelHoist, StaysInsideOccupancyStep)
    EXPECT_EQ(after[moved + 1], tile);
 
    /* A second run moves nothing more. */
-   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(ctx));
+   EXPECT_FALSE(agx3_hoist_pixel_independent(ctx));
    EXPECT_EQ(order(ctx), after);
    ralloc_free(mem);
 }
