@@ -11503,10 +11503,6 @@ agx_writes_uniform(const agx_instr *I)
    return false;
 }
 
-/* Halves kept free below the top of an occupancy step, as register
- * allocation lands a few halves above the pre-RA estimate. */
-#define AGX3_HOIST_RA_MARGIN 8
-
 bool
 agx3_hoist_pixel_independent(agx_context *ctx)
 {
@@ -11530,12 +11526,14 @@ agx3_hoist_pixel_independent(agx_context *ctx)
    }
 
    /* A moved value is live from the wait to its first use, so the move can
-    * raise register pressure. Keep the shader inside the occupancy step it is
-    * in now: a move that pushes its block's peak past the top of that step is
-    * undone. The pass runs before register allocation, so this uses the same
-    * estimate as the scheduler, and keeps the same margin below the top of the
-    * step for allocation alignment (AGX_ILP_M5_OCCUPANCY_MARGIN); a shader
-    * whose estimate is already past the register file is left alone. */
+    * raise register pressure. The pass runs before register allocation, so it
+    * takes the scheduler's estimate and the scheduler's growth rule
+    * (agx_occupancy_growth_cap): a block may grow up to the cap, inside the
+    * occupancy step the shader is in now. Where the rule allows no growth (too
+    * little headroom below the top of the step, or the last step, where
+    * crossing the top spills), a move may not raise its block's peak at all.
+    * A move past the limit is undone. A shader whose estimate is already past
+    * the register file is left alone. */
    agx_compute_liveness(ctx);
    agx_foreach_instr_global(ctx, I) {
       agx_foreach_ssa_dest(I, d)
@@ -11551,12 +11549,12 @@ agx3_hoist_pixel_independent(agx_context *ctx)
       free(size16);
       return false;
    }
-   const signed step_top =
-      agx_occupancy_for_register_count(program_peak + reserved).max_registers;
-   const signed limit = step_top - reserved - AGX3_HOIST_RA_MARGIN;
+   const signed cap = agx_occupancy_growth_cap(program_peak + reserved);
 
    bool progress = false;
    agx_foreach_block(ctx, block) {
+      const signed limit =
+         cap ? cap - reserved : agx_block_peak_pressure(ctx, block, size16);
       agx_instr *wait = NULL;
       agx_foreach_instr_in_block_safe(block, I) {
          if (!wait && I->op == AGX_OPCODE_WAIT_PIX) {
