@@ -1479,6 +1479,20 @@ ilp_block_peak(agx_context *ctx, agx_block *block, const uint8_t *size16,
    return out + peak;
 }
 
+/* ilp_block_peak() for passes that reorder inside a block after scheduling.
+ * The block's live-out set must be current (agx_compute_liveness()); moving
+ * instructions inside one block does not change it. size16 holds every SSA
+ * destination's agx_index_size_16(). */
+signed
+agx_block_peak_pressure(agx_context *ctx, agx_block *block,
+                        const uint8_t *size16)
+{
+   void *memctx = ralloc_context(NULL);
+   const signed peak = ilp_block_peak(ctx, block, size16, memctx);
+   ralloc_free(memctx);
+   return peak;
+}
+
 void
 agx_ilp_schedule(agx_context *ctx)
 {

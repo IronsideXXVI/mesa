@@ -11503,6 +11503,10 @@ agx_writes_uniform(const agx_instr *I)
    return false;
 }
 
+/* Halves kept free below the top of an occupancy step, as register
+ * allocation lands a few halves above the pre-RA estimate. */
+#define AGX3_HOIST_RA_MARGIN 8
+
 bool
 agx3_g16_hoist_pixel_independent(agx_context *ctx)
 {
@@ -11514,11 +11518,42 @@ agx3_g16_hoist_pixel_independent(agx_context *ctx)
       return false;
 
    /* Values computed only from uniforms and immediates by the movable ops,
-    * wherever they are in the block. Texture, varying and tile results never
-    * qualify, so per-pixel work keeps its scheduled place. */
+    * wherever they are in the block, that are available above the wait.
+    * Texture, varying and tile results never qualify, so per-pixel work keeps
+    * its scheduled place. */
    BITSET_WORD *uniform = BITSET_CALLOC(ctx->alloc);
-   if (!uniform)
+   uint8_t *size16 = calloc(MAX2(ctx->alloc, 1), sizeof(uint8_t));
+   if (!uniform || !size16) {
+      free(uniform);
+      free(size16);
       return false;
+   }
+
+   /* A moved value is live from the wait to its first use, so the move can
+    * raise register pressure. Keep the shader inside the occupancy step it is
+    * in now: a move that pushes its block's peak past the top of that step is
+    * undone. The pass runs before register allocation, so this uses the same
+    * estimate as the scheduler, and keeps the same margin below the top of the
+    * step for allocation alignment (AGX_ILP_M5_OCCUPANCY_MARGIN); a shader
+    * whose estimate is already past the register file is left alone. */
+   agx_compute_liveness(ctx);
+   agx_foreach_instr_global(ctx, I) {
+      agx_foreach_ssa_dest(I, d)
+         size16[I->dest[d].value] = agx_index_size_16(I->dest[d]);
+   }
+   signed program_peak = 0;
+   agx_foreach_block(ctx, block)
+      program_peak =
+         MAX2(program_peak, agx_block_peak_pressure(ctx, block, size16));
+   const signed reserved = agx_reserved_registers(ctx);
+   if (program_peak + reserved > (signed)agx_max_registers_for_occupancy(1)) {
+      free(uniform);
+      free(size16);
+      return false;
+   }
+   const signed step_top =
+      agx_occupancy_for_register_count(program_peak + reserved).max_registers;
+   const signed limit = step_top - reserved - AGX3_HOIST_RA_MARGIN;
 
    bool progress = false;
    agx_foreach_block(ctx, block) {
@@ -11552,16 +11587,26 @@ agx3_g16_hoist_pixel_independent(agx_context *ctx)
 
          if (!uniform_only)
             continue;
-         BITSET_SET(uniform, I->dest[0].value);
+
          if (wait) {
+            struct list_head *was_after = I->link.prev;
             list_del(&I->link);
             list_addtail(&I->link, &wait->link);
+            if (agx_block_peak_pressure(ctx, block, size16) > limit) {
+               /* Back to its place. Its value is not available above the
+                * wait, so nothing that reads it moves either. */
+               list_del(&I->link);
+               list_add(&I->link, was_after);
+               continue;
+            }
             progress = true;
          }
+         BITSET_SET(uniform, I->dest[0].value);
       }
    }
 
    free(uniform);
+   free(size16);
    return progress;
 }
 
