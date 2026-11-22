@@ -1275,6 +1275,7 @@ void agx_opt_promote_m5_float_constants(agx_context *ctx);
 void agx_dce(agx_context *ctx, bool partial);
 void agx_pressure_schedule(agx_context *ctx);
 void agx_ilp_schedule(agx_context *ctx);
+int agx_occupancy_growth_cap(int program_peak);
 int agx_ilp_m5_device_load_cap(int program_peak);
 signed agx_block_peak_pressure(agx_context *ctx, agx_block *block,
                                const uint8_t *size16);

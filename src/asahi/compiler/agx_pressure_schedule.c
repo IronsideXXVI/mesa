@@ -1249,18 +1249,18 @@ ilp_single_tile_blend(const agx_context *ctx, const agx_block *block)
  * in-flight device-load windows (at least this many). */
 #define AGX_ILP_M5_LOAD_HEADROOM 16
 
-/* Register count up to which an M5 compute block may grow to keep device
- * loads in flight, for a program whose estimated peak is program_peak halves,
- * or 0 when such blocks keep the issue-order schedule. The loads stay inside
- * the occupancy step the program is in, AGX_ILP_M5_OCCUPANCY_MARGIN below its
- * top, as register allocation lands a few halves above the estimate. A
- * program with fewer than AGX_ILP_M5_LOAD_HEADROOM halves free below the top
- * of its step keeps the issue-order schedule, since allocation can then cross
- * into the next step even when the estimate does not grow; so does a program
- * in the last step, where crossing the top spills.
+/* Register count up to which a pre-RA pass may raise the estimated pressure
+ * of a program whose estimated peak is program_peak halves, or 0 when it must
+ * not raise it. Growth stays inside the occupancy step the program is in,
+ * AGX_ILP_M5_OCCUPANCY_MARGIN below its top, as register allocation lands a
+ * few halves above the estimate. A program with fewer than
+ * AGX_ILP_M5_LOAD_HEADROOM halves free below the top of its step gets 0,
+ * since allocation can then cross into the next step even when the estimate
+ * does not grow; so does a program in the last step, where crossing the top
+ * spills.
  */
 int
-agx_ilp_m5_device_load_cap(int program_peak)
+agx_occupancy_growth_cap(int program_peak)
 {
    if (program_peak + AGX_ILP_M5_OCCUPANCY_MARGIN > AGX_ILP_M5_MAX_HALVES)
       return 0;
@@ -1272,6 +1272,14 @@ agx_ilp_m5_device_load_cap(int program_peak)
       return 0;
 
    return step_top - AGX_ILP_M5_OCCUPANCY_MARGIN;
+}
+
+/* Register count up to which an M5 compute block may grow to keep device
+ * loads in flight, or 0 when such blocks keep the issue-order schedule. */
+int
+agx_ilp_m5_device_load_cap(int program_peak)
+{
+   return agx_occupancy_growth_cap(program_peak);
 }
 
 /* Absolute peak register pressure of a block in source order, in halves:

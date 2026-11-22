@@ -182,8 +182,8 @@ peak_halves(agx_context *ctx)
  * each of 64 products is read right after it is computed, so the scheduled
  * order needs a few registers, while hoisting all of them would keep 128
  * halves live at the wait, past the first occupancy step (104 halves). The
- * pass moves a prefix of them, in order, and stops 8 halves below the step
- * (AGX3_HOIST_RA_MARGIN). */
+ * pass moves a prefix of them, in order, and stops where the scheduler's
+ * growth rule stops (agx_occupancy_growth_cap), 8 halves below the step. */
 TEST(Agx3PixelHoist, StaysInsideOccupancyStep)
 {
    void *mem = ralloc_context(nullptr);
@@ -233,5 +233,73 @@ TEST(Agx3PixelHoist, StaysInsideOccupancyStep)
    /* A second run moves nothing more. */
    EXPECT_FALSE(agx3_hoist_pixel_independent(ctx));
    EXPECT_EQ(order(ctx), after);
+   ralloc_free(mem);
+}
+
+/* The growth rule the pass shares with the scheduler: growth up to 8 halves
+ * below the top of the occupancy step, and none with fewer than 16 halves
+ * free below the top or in the last step. */
+TEST(Agx3PixelHoist, GrowthCapFollowsScheduler)
+{
+   EXPECT_EQ(agx_occupancy_growth_cap(40), 104 - 8);
+   EXPECT_EQ(agx_occupancy_growth_cap(88), 104 - 8);
+   EXPECT_EQ(agx_occupancy_growth_cap(89), 0);
+   EXPECT_EQ(agx_occupancy_growth_cap(185), 208 - 8);
+   EXPECT_EQ(agx_occupancy_growth_cap(193), 0);
+   EXPECT_EQ(agx_occupancy_growth_cap(233), 0);
+   EXPECT_EQ(agx_occupancy_growth_cap(250), 0);
+}
+
+/* The same 64 products as above, with 44 values defined ahead of the wait
+ * and read at the end, so the shader sits fewer than 16 halves below the top
+ * of its step. The pass may move only what does not raise the peak. */
+TEST(Agx3PixelHoist, NoGrowthWithoutHeadroom)
+{
+   void *mem = ralloc_context(nullptr);
+   agx_shader_key key = {};
+   key.dev.chip = AGX_CHIP_G16G;
+   key.dev.encoding = AGX_ISA_ENCODING_AGX3B;
+   agx_builder *b = agx_test_builder(mem);
+   b->shader->key = &key;
+   b->shader->stage = MESA_SHADER_FRAGMENT;
+   agx_context *ctx = b->shader;
+
+   std::vector<agx_index> pinned;
+   for (unsigned i = 0; i < 44; ++i) {
+      pinned.push_back(agx_mov_imm_to(b, agx_temp(ctx, AGX_SIZE_32),
+                                      0x3f800000 + i)
+                          ->dest[0]);
+   }
+   agx_instr *wait = agx_wait_pix(b, 1);
+   agx_instr *tile =
+      agx_ld_tile_to(b, agx_temp(ctx, AGX_SIZE_32), agx_immediate(0xff),
+                     agx_null(), AGX_FORMAT_I32, 1, 0, false, 0);
+   agx_index sum = tile->dest[0];
+   for (unsigned i = 0; i < 64; ++i) {
+      agx_instr *p = agx_fmul_to(b, agx_temp(ctx, AGX_SIZE_32),
+                                 agx_uniform(4 + 2 * (i % 8), AGX_SIZE_32),
+                                 agx_uniform(20 + 2 * (i % 4), AGX_SIZE_32));
+      sum = agx_fadd(b, sum, p->dest[0]);
+   }
+   for (agx_index v : pinned)
+      sum = agx_fadd(b, sum, v);
+   agx_st_tile(b, sum, agx_immediate(0xff), agx_null(), AGX_FORMAT_I32, 1, 0,
+               false, 0);
+
+   const signed before = peak_halves(ctx);
+   ASSERT_GT(before + agx_reserved_registers(ctx) + 16, 104);
+   ASSERT_LE(before + agx_reserved_registers(ctx), 104);
+   ASSERT_EQ(agx_occupancy_growth_cap(before + agx_reserved_registers(ctx)), 0);
+
+   agx3_hoist_pixel_independent(ctx);
+   EXPECT_LE(peak_halves(ctx), before);
+
+   /* Far fewer products move than with headroom. */
+   const std::vector<agx_instr *> after = order(ctx);
+   unsigned at = 0;
+   while (at < after.size() && after[at] != wait)
+      ++at;
+   ASSERT_LT(at, after.size());
+   EXPECT_LE(at, pinned.size() + 2);
    ralloc_free(mem);
 }
