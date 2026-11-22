@@ -363,6 +363,22 @@ struct hk_device {
    uint32_t cmd_syncobjs[HK_CMD_SYNCOBJ_POOL];
    unsigned cmd_syncobj_count;
 
+   /* In-flight kernel host writes to bound timestamp buffers (timestamp
+    * queries and stamped occlusion availability slots), used to emit
+    * DRM_ASAHI_COMPUTE_NO_QUERY_ACCESS on compute commands whose query
+    * accesses are disjoint from every pending host write. */
+   struct {
+      bool ready;
+      bool oom;
+      simple_mtx_t lock;
+      struct util_dynarray pending;
+      /* Open-addressed index into pending[] keyed on (handle, offset_B, queue):
+       * 0 is empty, value is pending index + 1. Power-of-two size when non-empty. */
+      uint32_t *slot_index;
+      size_t slot_cap;
+      size_t prune_threshold;
+   } query_stamps;
+
    /* Native G17P indirect compute grid helper.  A compact indirect helper
     * record carries no dimensions and no resource table, so the only way a
     * runtime grid can reach the main record is for this program to publish
@@ -541,13 +557,15 @@ hk_cdm_alias_scope(const struct hk_device *dev)
 }
 
 /* Whether the CDM strong flush has a memory-scoped form, which memory
- * reached through a second address needs (hk_cdm_alias_scope()): on G17P
- * and M5. G16 has only the plain strong flush; G17A's caches are not known
- * (hk_cdm_caches_pending()). */
+ * reached through a second address needs (hk_cdm_alias_scope()). Keyed on
+ * the chip table's AGX_RECORD_CDM_BARRIER_FLUSH_MEMORY capability (G17P
+ * and M5); G16 has only the plain strong flush and G17A's caches are not
+ * known (hk_cdm_caches_pending()). */
 static inline bool
 hk_cdm_memory_scope_form(const struct hk_device *dev)
 {
-   return dev->dev.chip == AGX_CHIP_G17P || agx_chip_g17_m5(dev->dev.chip);
+   return agx_chip_has_record(dev->dev.chip,
+                              AGX_RECORD_CDM_BARRIER_FLUSH_MEMORY);
 }
 
 /* Whether it is still unknown if the GPU's caches are tagged by virtual

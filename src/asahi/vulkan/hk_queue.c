@@ -34,6 +34,7 @@
 #include "hk_physical_device.h"
 #include "hk_query_pool.h"
 #include "hk_sparse.h"
+#include "vk_enum_to_str.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -116,6 +117,15 @@ queue_submit_empty(struct hk_device *dev, struct hk_queue *queue,
                           "DRM_IOCTL_SYNCOBJ_TRANSFER failed: %m");
    }
 
+   /* The waits are only in the queue timeline: no kernel job carries them,
+    * and the kernel orders this queue's later work after its earlier jobs
+    * alone. A wait's second scope includes every later submission of the
+    * queue (vkd3d-proton implements ID3D12CommandQueue::Wait as such an
+    * empty batch), so later submissions wait for this point themselves
+    * (queue_submit_recordings()). */
+   if (submit->wait_count)
+      queue->drm.empty_wait_point = queue->drm.timeline_value;
+
    return queue_signal_timeline(dev, queue, submit);
 }
 
@@ -141,6 +151,7 @@ hk_gen1_render_ray_query_stages(struct hk_device *dev, const struct hk_cs *cs,
 
 static void
 asahi_fill_cdm_command(struct hk_device *dev, struct hk_cs *cs,
+                       bool no_query_access,
                        struct drm_asahi_cmd_compute *cmd)
 {
    /* A linked stream leaves its root through a link record, so the root
@@ -150,7 +161,7 @@ asahi_fill_cdm_command(struct hk_device *dev, struct hk_cs *cs,
 
    *cmd = (struct drm_asahi_cmd_compute){
       .flags = (cs->m5_matrix_ops ? DRM_ASAHI_COMPUTE_USES_MATRIX : 0) |
-               (!cs->query_access &&
+               (no_query_access &&
                       (dev->dev.params.features &
                        DRM_ASAHI_FEATURE_COMPUTE_NO_QUERY_ACCESS)
                    ? DRM_ASAHI_COMPUTE_NO_QUERY_ACCESS
@@ -175,6 +186,21 @@ asahi_fill_cdm_command(struct hk_device *dev, struct hk_cs *cs,
       cmd->helper.cfg = cs->scratch.cs.preamble ? (1 << 16) : 0;
       cmd->helper.binary = agx_helper_program(&dev->bg_eot);
    }
+}
+
+/* Fill a compute command of the submission at queue->drm.timeline_value and
+ * record the timestamps the kernel will publish for it. NO_QUERY_ACCESS is
+ * decided by the query words the stream touches, against the stamps still
+ * pending on the device (renders and compute commands earlier in this
+ * submission included), not by query_access. */
+static void
+hk_queue_fill_cdm_command(struct hk_device *dev, struct hk_queue *queue,
+                          struct hk_cs *cs, struct drm_asahi_cmd_compute *cmd)
+{
+   const uint64_t point = queue->drm.timeline_value;
+   asahi_fill_cdm_command(dev, cs,
+                          !hk_query_stamps_conflict(dev, queue, point, cs), cmd);
+   hk_query_stamps_note_cs(dev, queue, point, cs);
 }
 
 /* Neither attachment storage nor empty-tile operations may observe the
@@ -247,7 +273,7 @@ asahi_fill_vdm_command(struct hk_device *dev, struct hk_cs *cs,
    memcpy(&c->zls_ctrl, &cs->cr.zls_control, sizeof(cs->cr.zls_control));
 
    const bool g18g = dev->dev.chip == AGX_CHIP_G18G;
-   if (agx_native_graphics(&dev->dev) || agx_chip_g17_m5(dev->dev.chip) ||
+   if (agx_chip_native_or_m5(dev->dev.chip) ||
        g18g) {
       c->isp_zls_pixels = agx_chip_g17_m5(dev->dev.chip) || g18g
          ? hk_drm_m5_zls_pixels(
@@ -283,7 +309,7 @@ asahi_fill_vdm_command(struct hk_device *dev, struct hk_cs *cs,
     * render pass whose known primitive count is at most four, and never for
     * a continued pass or one with uncounted (indirect, mesh) work. This
     * stream's bound counts every draw of the whole pass, so it proves that. */
-   if ((agx_native_graphics(&dev->dev) || agx_chip_g17_m5(dev->dev.chip)) &&
+   if (agx_chip_native_or_m5(dev->dev.chip) &&
        (dev->dev.params.features & DRM_ASAHI_FEATURE_FEW_PRIMITIVES) &&
        cs->g17p_pass_begins && cs->g17p_pass_ends &&
        cs->g17p_primitive_bound <= 4) {
@@ -436,7 +462,7 @@ asahi_append_compute_attachments(struct hk_device *dev,
    /* Attachment spans are hints for the native AGX3 firmware interface.
     * AGX2 has never sent them, so G13 and G14 keep that submission. G18G
     * (M6) sends them as well. */
-   if (!agx_native_graphics(&dev->dev) && dev->dev.chip != AGX_CHIP_G18G)
+   if (!agx_chip_native_or_g18g(dev->dev.chip))
       return;
 
    const struct hk_drm_attachment_set *set = &cs->compute_attachments;
@@ -460,7 +486,7 @@ asahi_append_fragment_attachments(struct hk_device *dev,
                                   const struct hk_cs *cs)
 {
    /* See asahi_append_compute_attachments(). */
-   if (!agx_native_graphics(&dev->dev) && dev->dev.chip != AGX_CHIP_G18G)
+   if (!agx_chip_native_or_g18g(dev->dev.chip))
       return;
 
    const struct hk_drm_attachment_set *set = &cs->fragment_attachments;
@@ -1350,7 +1376,7 @@ hk_queue_restart_sync(struct hk_queue *queue)
 static bool
 hk_queue_admits_at_entry(const struct hk_device *dev)
 {
-   return agx_chip_g17_m5(dev->dev.chip) || dev->dev.chip == AGX_CHIP_G17P;
+   return agx_chip_g17p_or_m5(dev->dev.chip);
 }
 
 /* Admission must precede the common runtime's semaphore payload moves and
@@ -1585,8 +1611,7 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
       if (result != VK_SUCCESS)
          return result;
 
-      flush_sstt = (dev->dev.chip == AGX_CHIP_G17P ||
-                    agx_chip_g17_m5(dev->dev.chip)) &&
+      flush_sstt = agx_chip_g17p_or_m5(dev->dev.chip) &&
                    hk_sparse_submission_updates_sstt(submit);
    }
 
@@ -1697,12 +1722,38 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
       alloca((submit->wait_count + kernel_signal_count + 3) *
              sizeof(struct drm_asahi_sync));
 
+   /* At most one wait on the queue's own timeline: the kernel refuses two
+    * points of one timeline in a submission. own_wait is its index. */
+   int own_wait = -1;
    if (replaced) {
+      own_wait = wait_count;
       syncs[wait_count++] = (struct drm_asahi_sync){
          .sync_type = DRM_ASAHI_SYNC_TIMELINE_SYNCOBJ,
          .handle = queue->drm.syncobj,
          .timeline_value = replaced_point,
       };
+   }
+
+   /* Waits an earlier empty submission transferred into the queue timeline
+    * (queue_submit_empty()) order this submission too, until they are known
+    * complete: work sent to a sibling kernel queue or in a later chunk is not
+    * ordered after the kernel job that first carried them. */
+   if (queue->drm.empty_wait_point) {
+      uint64_t done = 0;
+      if (drmSyncobjQuery(dev->dev.fd, &queue->drm.syncobj, &done, 1) == 0 &&
+          done >= queue->drm.empty_wait_point) {
+         queue->drm.empty_wait_point = 0;
+      } else if (own_wait >= 0) {
+         syncs[own_wait].timeline_value =
+            MAX2(syncs[own_wait].timeline_value, queue->drm.empty_wait_point);
+      } else {
+         own_wait = wait_count;
+         syncs[wait_count++] = (struct drm_asahi_sync){
+            .sync_type = DRM_ASAHI_SYNC_TIMELINE_SYNCOBJ,
+            .handle = queue->drm.syncobj,
+            .timeline_value = queue->drm.empty_wait_point,
+         };
+      }
    }
 
    for (unsigned i = 0; i < submit->wait_count; ++i) {
@@ -2001,7 +2052,7 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
                                          cs->compute_resources.size);
             }
             struct drm_asahi_cmd_compute_with_prior cmd = {0};
-            asahi_fill_cdm_command(dev, cs, &cmd.legacy);
+            hk_queue_fill_cdm_command(dev, queue, cs, &cmd.legacy);
             cmd.legacy.flags |= hk_as_build_flags(dev->dev.chip,
                                                   dev->dev.params.features,
                                                   cs->as_build);
@@ -2102,6 +2153,7 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
             }
             struct drm_asahi_cmd_render_with_prior cmd = {0};
             asahi_fill_vdm_command(dev, cs, &cmd.legacy);
+            hk_query_stamps_note_cs(dev, queue, queue->drm.timeline_value, cs);
 
             /* M5: the vertex half's own render and compute prefixes, when
              * they are narrower than the whole render's, so its tiling can
@@ -2211,8 +2263,7 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
                hk_frame_anatomy_render(anatomy, dev, cs, &cmd.legacy, i,
                                        nr_vdm + nr_cdm, payload.size);
             header.size = hk_drm_render_command_size(
-               agx_native_graphics(&dev->dev) || agx_chip_g17_m5(dev->dev.chip) ||
-                  dev->dev.chip == AGX_CHIP_G18G,
+               agx_chip_agx3_path(dev->dev.chip),
                queue->sync.exact_prior);
             if (queue->sync.exact_prior) {
                cmd.prior_vdm = command_prior[HK_SYNC_VDM];
@@ -2284,13 +2335,18 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
     * first submission already waits for every earlier point. */
    if (sib_remap && sib_earlier && !replaced) {
       assert(sib_target == 0);
-      memmove(&syncs[wait_count + 1], &syncs[wait_count],
-              (kernel_signal_count + 1) * sizeof(*syncs));
-      syncs[wait_count++] = (struct drm_asahi_sync){
-         .sync_type = DRM_ASAHI_SYNC_TIMELINE_SYNCOBJ,
-         .handle = queue->drm.syncobj,
-         .timeline_value = queue->sib.last_point,
-      };
+      if (own_wait >= 0) {
+         syncs[own_wait].timeline_value =
+            MAX2(syncs[own_wait].timeline_value, queue->sib.last_point);
+      } else {
+         memmove(&syncs[wait_count + 1], &syncs[wait_count],
+                 (kernel_signal_count + 1) * sizeof(*syncs));
+         syncs[wait_count++] = (struct drm_asahi_sync){
+            .sync_type = DRM_ASAHI_SYNC_TIMELINE_SYNCOBJ,
+            .handle = queue->drm.syncobj,
+            .timeline_value = queue->sib.last_point,
+         };
+      }
    }
 
    struct drm_asahi_submit submit_ioctl = {
@@ -2371,12 +2427,13 @@ queue_submit_recordings(struct hk_device *dev, struct hk_queue *queue,
  *   through a second address needs (hk_cdm_alias_scope()); while such
  *   memory may exist, it keeps or gets the scope. The packet's end gets the
  *   whole flush, upgraded in place where the last member's lacked the scope.
- * - HAL200 streams whose strong flush has no memory-scoped form (G16) end
- *   with their last launch's ordering barrier or a strong flush, and the end
- *   of the command publishes their writes. At a boundary the record becomes
- *   the strong flush, as for a compute or transfer dependency inside one
- *   stream. The last member's tail stays as recorded; the packet's own end
- *   of command follows it.
+ * - HAL200 streams whose caches are qualified (!hk_cdm_caches_pending(),
+ *   G16 and G17P) end with their last launch's ordering barrier or a strong
+ *   flush, and the end of the command publishes their writes. At a boundary
+ *   the record becomes the strong flush, adding memory scope on G17P while
+ *   aliased mappings exist (hk_cdm_alias_scope()). The last member's tail
+ *   stays as recorded unless alias scope became active after recording on a
+ *   part with a memory-scoped flush, in which case it is upgraded in place.
  *
  * Work in a packet waits for whatever any member waited for, and work after
  * it waits for the whole packet. On the compute subqueue that adds no
@@ -2430,7 +2487,7 @@ hk_pack_runs_enabled(const struct hk_device *dev)
 static uint32_t
 hk_pack_attachment_limit(const struct hk_device *dev)
 {
-   if ((!agx_native_graphics(&dev->dev) && dev->dev.chip != AGX_CHIP_G18G) ||
+   if (!agx_chip_native_or_g18g(dev->dev.chip) ||
        !dev->dev.params.max_attachments)
       return UINT32_MAX;
    return dev->dev.params.max_attachments;
@@ -2668,8 +2725,14 @@ hk_pack_runs(struct hk_device *dev, const struct hk_queue *queue,
             hk_cdm_visibility_flush(dev, cs, last || hk_cdm_alias_scope(dev));
          } else if (!last) {
             /* HAL200: the member's ordering barrier becomes the strong
-             * flush, or its strong flush stays. */
-            hk_cdm_visibility_flush(dev, cs, false);
+             * flush, or its strong flush stays; on parts with a memory-scoped
+             * flush (G17P), add memory scope while aliased mappings exist. */
+            hk_cdm_visibility_flush(dev, cs, hk_cdm_alias_scope(dev));
+         } else if (hk_cdm_memory_scope_form(dev) && hk_cdm_alias_scope(dev) &&
+                    hk_cdm_visibility_flush_needed(dev, cs, true)) {
+            /* A VA-aliasing resource may have been created after the final
+             * member was recorded: upgrade its tail to memory scope in place. */
+            hk_cdm_visibility_flush(dev, cs, true);
          }
 
          hk_pack_fold_member(cmd, cs, source, item, last, &preceding_kinds);
@@ -2743,6 +2806,16 @@ hk_submit_has_compute(const struct vk_queue_submit *submit)
    return false;
 }
 
+struct vk_command_buffer *
+hk_submit_first_errored_cmd_buffer(const struct vk_queue_submit *submit)
+{
+   for (uint32_t i = 0; i < submit->command_buffer_count; ++i) {
+      if (vk_command_buffer_has_error(submit->command_buffers[i]))
+         return submit->command_buffers[i];
+   }
+   return NULL;
+}
+
 static VkResult
 hk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
 {
@@ -2751,6 +2824,18 @@ hk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
 
    if (vk_device_is_lost_no_report(&dev->vk))
       return VK_ERROR_DEVICE_LOST;
+
+   /* Submitting a command buffer whose recording failed is invalid usage,
+    * and its control streams may stop short of their end. The GPU must never
+    * run them: the device is lost for this client instead.
+    */
+   struct vk_command_buffer *errored =
+      hk_submit_first_errored_cmd_buffer(submit);
+   if (unlikely(errored)) {
+      return vk_queue_set_lost(&queue->vk,
+                               "submitted a command buffer recorded with %s",
+                               vk_Result_to_str(errored->record_result));
+   }
 
    /* While a resource may alias, the command buffers recorded before it get
     * memory scope at their patch sites (hk_cdm_alias_scope()), before
@@ -2993,8 +3078,7 @@ hk_queue_create(struct hk_device *dev,
    queue->drm.timeline_value = initial_value;
    queue->drm.signalled_value = initial_value;
 
-   if ((dev->dev.chip == AGX_CHIP_G17P ||
-        agx_chip_g17_m5(dev->dev.chip)) &&
+   if (agx_chip_g17p_or_m5(dev->dev.chip) &&
        dev->vk.enabled_features.sparseBinding && !kick) {
       queue->g17p_sstt_flush_bo =
          agx_bo_create(&dev->dev, AIL_PAGESIZE, 0, 0, "SSTT flush stream");
@@ -3079,6 +3163,7 @@ hk_queue_finish(struct hk_device *dev, struct hk_queue *queue)
 {
    /* Stop/join the submit worker before releasing anything it can use. */
    vk_queue_finish(&queue->vk);
+   hk_query_stamps_clear_queue(dev, queue);
    hk_cmd_pending_finish_queue(dev, queue);
    drmSyncobjDestroy(dev->dev.fd, queue->drm.syncobj);
    if (queue->drm.id != UINT32_MAX)
