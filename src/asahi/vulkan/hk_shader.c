@@ -1018,8 +1018,9 @@ hk_hash_graphics_state(struct vk_physical_device *device,
       _mesa_blake3_update(&blake3_ctx, &clip_m1_1, sizeof(clip_m1_1));
    }
 
-   /* Whether G17P and M5 shaders compile the custom-border emulation in
-    * (hk_compile_shader_impl): a cached shader was compiled the same way. */
+   /* Whether native AGX3 (G15G/S/C, G16G, G17P) and M5 shaders compile the
+    * custom-border emulation in (hk_compile_shader_impl): a cached shader was
+    * compiled the same way. */
    struct hk_physical_device *pdev =
       container_of(device, struct hk_physical_device, vk);
    if (agx_native_graphics(&pdev->dev) || agx_chip_g17_m5(pdev->dev.chip)) {
@@ -7068,11 +7069,11 @@ hk_compile_shader_impl(struct hk_device *dev, struct vk_shader_compile_info *inf
       NIR_PASS(_, nir, agx_nir_lower_m5_mesh_fragment);
 
 
-   /* G17P and M5 compile the custom-border emulation in only once the
-    * physical device has a sampler that needs it (hk_CreateSampler). Until
-    * then, drop its branches and keep this NIR to compile the emulating twin
-    * from. A shader whose emulation lost the shape it was built with keeps
-    * it. */
+   /* Native AGX3 (G15G/S/C, G16G, G17P) and M5 compile the custom-border
+    * emulation in only once the physical device has a sampler that needs it
+    * (hk_CreateSampler). Until then, drop its branches and keep this NIR to
+    * compile the emulating twin from. A shader whose emulation lost the shape
+    * it was built with keeps it. */
    void *border_nir = NULL;
    size_t border_nir_size = 0;
    bool border_emulating = false;
