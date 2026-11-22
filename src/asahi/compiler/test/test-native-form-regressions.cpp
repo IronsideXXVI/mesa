@@ -7435,7 +7435,7 @@ TEST(NativeForms, Agx3bFfmaKeepsUnmodifiedHalfGprNative)
    }
 }
 
-TEST(NativeForms, G16SharedNegativeZero)
+TEST(NativeForms, Agx3bSharedNegativeZero)
 {
    for (enum agx_chip chip : {AGX_CHIP_G15G, AGX_CHIP_G16G, AGX_CHIP_G17P}) {
    SCOPED_TRACE(chip);
