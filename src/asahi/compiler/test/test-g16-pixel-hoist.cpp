@@ -162,3 +162,76 @@ TEST(G16PixelHoist, StopsAtUniformWrite)
    EXPECT_EQ(order(c.b->shader), before);
    ralloc_free(c.mem);
 }
+
+static signed
+peak_halves(agx_context *ctx)
+{
+   agx_compute_liveness(ctx);
+   std::vector<uint8_t> size16(MAX2(ctx->alloc, 1), 0);
+   agx_foreach_instr_global(ctx, I) {
+      agx_foreach_ssa_dest(I, d)
+         size16[I->dest[d].value] = agx_index_size_16(I->dest[d]);
+   }
+   signed peak = 0;
+   agx_foreach_block(ctx, block)
+      peak = MAX2(peak, agx_block_peak_pressure(ctx, block, size16.data()));
+   return peak;
+}
+
+/* Hoisting a uniform-only value makes it live from the wait to its use. Here
+ * each of 64 products is read right after it is computed, so the scheduled
+ * order needs a few registers, while hoisting all of them would keep 128
+ * halves live at the wait, past the first occupancy step (104 halves). The
+ * pass moves a prefix of them, in order, and stops 8 halves below the step
+ * (AGX3_HOIST_RA_MARGIN). */
+TEST(G16PixelHoist, StaysInsideOccupancyStep)
+{
+   void *mem = ralloc_context(nullptr);
+   agx_shader_key key = {};
+   key.dev.chip = AGX_CHIP_G16G;
+   key.dev.encoding = AGX_ISA_ENCODING_AGX3B;
+   agx_builder *b = agx_test_builder(mem);
+   b->shader->key = &key;
+   b->shader->stage = MESA_SHADER_FRAGMENT;
+   agx_context *ctx = b->shader;
+
+   agx_instr *wait = agx_wait_pix(b, 1);
+   agx_instr *tile =
+      agx_ld_tile_to(b, agx_temp(ctx, AGX_SIZE_32), agx_immediate(0xff),
+                     agx_null(), AGX_FORMAT_I32, 1, 0, false, 0);
+   agx_index sum = tile->dest[0];
+   std::vector<agx_instr *> products;
+   for (unsigned i = 0; i < 64; ++i) {
+      agx_instr *p = agx_fmul_to(b, agx_temp(ctx, AGX_SIZE_32),
+                                 agx_uniform(4 + 2 * (i % 8), AGX_SIZE_32),
+                                 agx_uniform(20 + 2 * (i % 4), AGX_SIZE_32));
+      products.push_back(p);
+      sum = agx_fadd(b, sum, p->dest[0]);
+   }
+   agx_st_tile(b, sum, agx_immediate(0xff), agx_null(), AGX_FORMAT_I32, 1, 0,
+               false, 0);
+
+   const signed before = peak_halves(ctx);
+   ASSERT_LE(before, 104 - 8);
+
+   EXPECT_TRUE(agx3_g16_hoist_pixel_independent(ctx));
+   EXPECT_LE(peak_halves(ctx), 104 - 8);
+
+   /* The moved products are the first ones, in their order, ahead of the
+    * wait; the rest keep their place after it. */
+   const std::vector<agx_instr *> after = order(ctx);
+   unsigned moved = 0;
+   while (moved < after.size() && after[moved] != wait)
+      ++moved;
+   ASSERT_LT(moved, after.size());
+   EXPECT_GT(moved, 0u);
+   EXPECT_LT(moved, products.size());
+   for (unsigned i = 0; i < moved; ++i)
+      EXPECT_EQ(after[i], products[i]);
+   EXPECT_EQ(after[moved + 1], tile);
+
+   /* A second run moves nothing more. */
+   EXPECT_FALSE(agx3_g16_hoist_pixel_independent(ctx));
+   EXPECT_EQ(order(ctx), after);
+   ralloc_free(mem);
+}
