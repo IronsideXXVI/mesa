@@ -11508,7 +11508,7 @@ agx_writes_uniform(const agx_instr *I)
 #define AGX3_HOIST_RA_MARGIN 8
 
 bool
-agx3_g16_hoist_pixel_independent(agx_context *ctx)
+agx3_hoist_pixel_independent(agx_context *ctx)
 {
    /* A chip with a constant program takes the uniform-only work there. The
     * hoist has been run on G16G hardware only. */
@@ -13685,7 +13685,7 @@ agx_compile_function_nir_attempt(nir_shader *nir, nir_function_impl *impl,
    }
 
    AGX_PASS(ctx, agx3_order_fragment_device_loads);
-   AGX_PASS(ctx, agx3_g16_hoist_pixel_independent);
+   AGX_PASS(ctx, agx3_hoist_pixel_independent);
 
    if (agx_should_dump(nir, AGX_DBG_SHADERS))
       agx_print_shader(ctx, stdout);
