@@ -2566,6 +2566,13 @@ hk_gfx_root_descriptor_size(const struct hk_cmd_buffer *cmd)
 {
    const size_t full = sizeof(struct hk_root_descriptor_table);
    const struct hk_graphics_state *gfx = &cmd->state.gfx;
+
+   /* A G16G fragment program with host-evaluated uniforms reads them from
+    * g16_host_unif, the last root field, through a uniform range that the
+    * NIR root-size scan does not see. */
+   const struct hk_linked_shader *linked_fs = gfx->linked[MESA_SHADER_FRAGMENT];
+   if (linked_fs && linked_fs->g16_host.n_out)
+      return full;
    if (gfx->shaders[MESA_SHADER_TESS_CTRL] ||
        gfx->shaders[MESA_SHADER_TESS_EVAL] ||
        gfx->shaders[MESA_SHADER_GEOMETRY] ||

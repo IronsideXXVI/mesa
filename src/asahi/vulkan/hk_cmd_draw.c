@@ -12445,6 +12445,11 @@ hk_g17p_flush_dynamic_state_fast(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
    if (!linked_vs || !linked_fs || linked_vs->sw_indexing)
       return false;
 
+   /* Host-evaluated G16G fragment uniforms follow the push constants and are
+    * evaluated by hk_flush_dynamic_state_slow() before the root upload. */
+   if (linked_fs->g16_host.n_out)
+      return false;
+
    struct hk_shader *hw_vs = hk_bound_hw_vs(gfx);
    struct hk_shader *sw_vs = hk_bound_sw_vs(gfx);
    struct hk_shader *fs = hk_bound_fs(cmd);
